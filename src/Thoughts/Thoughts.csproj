@@ -11,7 +11,7 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <PublishAot>true</PublishAot>
     <NoWarn>$(NoWarn);CA1416</NoWarn>
-    <EngineRoot Condition="'$(EngineRoot)' == ''">C:\WAVEE\lane-thoughts\fluent-gpu\</EngineRoot>
+    <EngineRoot Condition="'$(EngineRoot)' == ''">$(MSBuildThisFileDirectory)..\..\..\fluent-gpu\</EngineRoot>
     <DefaultVaultPath>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\vault'))</DefaultVaultPath>
   </PropertyGroup>
 
