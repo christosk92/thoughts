@@ -122,7 +122,7 @@ After a few dozen real Thoughts, run a blind manual check using a plain script: 
 ## Decided at sign-off
 
 - The app is called Thoughts.
-- No tests in this repo, the same rule as the fgpu workspace. Verify with builds, renders and running the app. The real-notes check is a plain script.
+- No tests in this repo, the same rule as the fgpu workspace. Verify each ticket by running the real app with real AI, on a throwaway vault of fake Thoughts with a low Budget. The real-notes check is a plain script.
 
 ## Open
 
