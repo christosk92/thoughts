@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>14</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <PublishAot>true</PublishAot>
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+    <EngineRoot Condition="'$(EngineRoot)' == ''">C:\WAVEE\fgpu\fluent-gpu\</EngineRoot>
+    <DefaultVaultPath>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\vault'))</DefaultVaultPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <AssemblyMetadata Include="DefaultVaultPath" Value="$(DefaultVaultPath)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="YamlDotNet" Version="16.3.0" />
+    <ProjectReference Include="$(EngineRoot)src\FluentGpu.Engine\FluentGpu.Engine.csproj" />
+    <ProjectReference Include="$(EngineRoot)src\FluentGpu.Controls\FluentGpu.Controls.csproj" />
+    <ProjectReference Include="$(EngineRoot)src\FluentGpu.Windows\FluentGpu.Windows.csproj" />
+    <ProjectReference Include="$(EngineRoot)src\FluentGpu.WindowsApi\FluentGpu.WindowsApi.csproj" />
+    <ProjectReference Include="$(EngineRoot)src\FluentGpu.SourceGen\FluentGpu.SourceGen.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+</Project>
