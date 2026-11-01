@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- PROTOTYPE, throw away: answers "what should the Board look like?" with fake in-memory data. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>14</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+    <EngineRoot Condition="'$(EngineRoot)' == ''">C:\WAVEE\fgpu\fluent-gpu\</EngineRoot>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="$(EngineRoot)src\FluentGpu.Engine\FluentGpu.Engine.csproj" />
+    <ProjectReference Include="$(EngineRoot)src\FluentGpu.Controls\FluentGpu.Controls.csproj" />
+    <ProjectReference Include="$(EngineRoot)src\FluentGpu.Windows\FluentGpu.Windows.csproj" />
+    <ProjectReference Include="$(EngineRoot)src\FluentGpu.WindowsApi\FluentGpu.WindowsApi.csproj" />
+    <ProjectReference Include="$(EngineRoot)src\FluentGpu.SourceGen\FluentGpu.SourceGen.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+</Project>
