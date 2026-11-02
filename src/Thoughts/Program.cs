@@ -23,6 +23,8 @@ static class Program
         if (Arg("--vault") is { } vault) settings.VaultPath = vault;
 #if DEBUG
         Organizer.RequestLog = Arg("--ai-log");
+        if (Arg("--embeddings") is { } embeddings) LocalIndex.Dir = embeddings;
+        LocalIndex.ForceCpu = Array.IndexOf(args, "--embeddings-cpu") >= 0;
 #endif
 
         Tok.Use(Arg("--theme") == "light" ? ThemeKind.Light : ThemeKind.Dark);

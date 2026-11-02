@@ -664,6 +664,7 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                                     ApiKey.Remove();
                                     keyState.Value = ApiKey.Describe();
                                 })),
+                            Body(LocalIndex.Describe()),
                             Embed.Comp(() => new AiSettingsSection(settings, () =>
                             {
                                 if (canSave) settings.Save(settingsFile);

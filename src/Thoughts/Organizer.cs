@@ -37,6 +37,7 @@ sealed class Organizer(Vault vault, Func<IModelBackend?> backend, Action<Organiz
     readonly CancellationTokenSource _stop = new();
     readonly SemaphoreSlim _wake = new(0);
     readonly object _lock = new();
+    readonly LocalIndex _index = new(vault.StoreDir, vault.ReadCard);
     readonly List<string> _failed = [];
     string? _current;
     string? _connecting;
@@ -230,9 +231,7 @@ sealed class Organizer(Vault vault, Func<IModelBackend?> backend, Action<Organiz
 
         var projects = vault.ReadProjects();
         var people = vault.ReadPeople();
-        var candidates = vault.ReadThoughts()
-            .Where(t => t.Title != title && !t.KeepLocal && t.Status != Status.Dropped)
-            .Take(MaxCandidates).ToList();
+        var candidates = _index.Narrow(note, Sendable(title), MaxCandidates);
         string user = BuildUserTurn(note, projects, people, candidates);
         if (RequestLog is { } log) File.AppendAllText(log, user + "\n");
 
@@ -254,6 +253,10 @@ sealed class Organizer(Vault vault, Func<IModelBackend?> backend, Action<Organiz
         EnqueueConnect(outcome.Title, reply.Json, candidates, outcome.Relation?.Target);
     }
 
+    // Keep-local Thoughts never get this far, so they're in no prompt and no local index.
+    List<Thought> Sendable(string except) =>
+        vault.ReadThoughts().Where(t => t.Title != except && !t.KeepLocal && t.Status != Status.Dropped).ToList();
+
     // Organize read every card to choose these, so Connect finds notes that share few words. It never sees the cards itself.
     void EnqueueConnect(string title, string json, List<Thought> candidates, string? skip)
     {
@@ -263,6 +266,7 @@ sealed class Organizer(Vault vault, Func<IModelBackend?> backend, Action<Organiz
             .Where(id => id.StartsWith('c') && int.TryParse(id.AsSpan(1), out int n) && n >= 1 && n <= candidates.Count)
             .Select(id => candidates[int.Parse(id.AsSpan(1)) - 1].Title)
             .Where(t => t != skip).Distinct().Take(MaxNearby).ToList();
+        _index.LogShadow(doc.RootElement.GetProperty("card").GetRawText(), candidates, nearby);
         if (nearby.Count > 0) Enqueue(ConnectPrefix + title + "\t" + string.Join('\t', nearby));
     }
 
@@ -326,7 +330,7 @@ sealed class Organizer(Vault vault, Func<IModelBackend?> backend, Action<Organiz
         var note = vault.ReadThoughts().FirstOrDefault(t => t.Title == title);
         if (note is null || note.KeepLocal) return;
         var model = backend() ?? throw new ModelException(ModelFailure.NoKey, "No API key.");
-        var candidates = vault.ReadThoughts().Where(t => t.Title != title && !t.KeepLocal && t.Status != Status.Dropped).Take(MaxCandidates).ToList();
+        var candidates = _index.Narrow(note, Sendable(title), MaxCandidates);
         var request = new ModelRequest(settings.OrganizeModel, InLanguage(SystemPrompt), BuildUserTurn(note, vault.ReadProjects(), vault.ReadPeople(), candidates), Schema, MaxTokens);
         var reply = await model.Complete(request, _stop.Token);
         usage.Record("Refresh card", request, reply);

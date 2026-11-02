@@ -31,3 +31,5 @@ dotnet run --project src/Thoughts -- --vault C:\temp\thoughts-try --settings C:\
 ## License
 
 [MIT](LICENSE)
+
+Optional: `tools/get-embeddings.ps1` downloads a local embedding model. It runs on this PC, on the NPU when there is one, and only changes anything above 300 notes.
