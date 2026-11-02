@@ -33,7 +33,7 @@ The monthly amount the AI may spend. Reaching it pauses AI work, never capture.
 _Avoid_: Limit, quota
 
 **Map**:
-A view of how one Thought grew, with that Thought at the centre and what came from it branching out.
+A 3D view of how one Thought grew, with that Thought near the centre and what came from it branching out.
 _Avoid_: Graph, tree, mind map
 
 **Status**:

@@ -84,7 +84,7 @@ The app must:
 - **Board** (prototype layout B): one row per Project, columns Inbox to Done, Dropped in a collapsed row, a Project filter, Review with its count.
 - **Capture strip:** under the capture box. Shows "Saved to Inbox" at once, then the Project and suggestions a few seconds later, with actions. It fades at the next capture, and the suggestions stay in the panel and Review.
 - **Panel:** a floating sheet with no border, a header tinted in the Project's colour, Status as a row of steps, suggestions, Connections, and source + preview Markdown editing using the FluentGpu control. "Open in Obsidian" is pinned at the bottom.
-- **Map** (v1): opened from a Thought. `from` links are solid branches, and Connections are dotted. Nodes show title and Status colour. Click opens the panel, and double-click recentres. A Thought with two parents draws the first as its branch and the second as dotted.
+- **Map** (v1): opened from a Thought, a 3D space the person moves through. Drag orbits, the wheel zooms, Shift-drag pans, and arrow keys, plus, minus and Home also work. `from` links are solid branches, and Connections are dotted. Nodes show title and Status colour. Click opens the panel, and double-click recentres. A Thought with two parents draws the first as its branch and the second as dotted. Near nodes are larger, far ones fade, and labels that would overlap give way to nearer ones. It draws nothing while still.
 - **Review:** all of Inbox, plus Parked not looked at for 2 weeks, oldest first, one at a time. The person starts it.
 - **Usage page:** this month against Budget, by step and model, and every call, with no note text in the log.
 

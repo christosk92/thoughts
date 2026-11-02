@@ -37,6 +37,12 @@ sealed class Drive(string scriptFile, float scale) : Component
                 case "move": Send(post, new InputEvent(InputKind.PointerMove, At(arg), 0, 0)); break;
                 case "down": Send(post, new InputEvent(InputKind.PointerDown, At(arg), 0, 0)); break;
                 case "up": Send(post, new InputEvent(InputKind.PointerUp, At(arg), 0, 0)); break;
+                case "shiftdown": Send(post, new InputEvent(InputKind.PointerDown, At(arg), 0, 0, KeyModifiers.Shift)); break;
+                case "wheel":
+                    var w = arg.Split(' ');
+                    Send(post, InputEvent.ForScroll(new FluentGpu.Scroll.Runtime.ScrollInputEvent(FluentGpu.Scroll.Runtime.ScrollSource.MouseWheel,
+                        FluentGpu.Scroll.Runtime.ScrollGesture.Notch, 0, At(w[0] + " " + w[1]), 0f, float.Parse(w[2]), 0, KeyModifiers.None)));
+                    break;
                 case "key":
                     Send(post, new InputEvent(InputKind.Key, default, 0, int.Parse(arg)));
                     Send(post, new InputEvent(InputKind.KeyUp, default, 0, int.Parse(arg)));

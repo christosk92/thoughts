@@ -55,6 +55,7 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
         var organizer = UseRef<Organizer?>(null);
         var queue = UseSignal(OrganizeQueue.Empty);
         var connections = UseSignal(LoadConnections(settings.VaultPath));
+        var mapFocus = UseSignal<string?>(null);
         var showUsage = UseSignal(false);
         var usageCalls = UseSignal<IReadOnlyList<UsageCall>>([]);
         var budget = UseSignal(settings.BudgetUsd);
@@ -396,6 +397,7 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
             },
             ConnectionsOf: title => connections.Value.Where(c => c.State != ConnectionState.Dismissed && c.Involves(title)).ToList(),
             Connections: connectionActions,
+            OpenMap: title => mapFocus.Value = title,
             PieceCount: title =>
             {
                 var pieces = thoughts.Value.Where(x => x.CameFrom(title) && x.Status != Status.Dropped).ToList();
@@ -799,7 +801,7 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                                     OnCommit = Capture,
                                 }),
                             ],
-                        }, StripContent, stripOpen, null, FlyoutPlacement.BottomEdgeAlignedLeft,
+                        }, () => new BoxEl { OnClick = static () => { }, Children = [StripContent()] }, stripOpen, null, FlyoutPlacement.BottomEdgeAlignedLeft,
                             new PopupOptions(FocusTrap: false, DismissBehavior: DismissBehavior.None) { PreserveFocusOnOpen = true }),
                         Button.Accent("Add", () => Capture(capture.Peek())),
                         ToggleButton.Create("Keep local", keepLocal),
@@ -864,13 +866,36 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
         };
 
         var open = selected.Value is { } title ? all.FirstOrDefault(t => t.Title == title) : null;
-        var layers = new List<Element> { board };
+        // The Map takes the Board's place, under the panel, so clicking a Thought on it opens the same panel.
+        var layers = new List<Element>();
+        if (mapFocus.Value is { } focus && all.Any(t => t.Title == focus))
+            layers.Add(new BoxEl
+            {
+                Key = "map-layer",
+                Direction = 1,
+                Grow = 1f,
+                Children =
+                [
+                    Embed.Comp(new MapProps(focus, all, connections.Value, selected.Value,
+                        title => selected.Value = title,
+                        title => mapFocus.Value = title,
+                        () => mapFocus.Value = null), () => new MapPage()),
+                ],
+            });
+        else
+            layers.Add(board);
         // Over the Board, not beside it, so opening a Thought moves nothing.
         if (open is not null)
             layers.Add(new BoxEl
             {
                 Key = "panel",
                 OnRealized = h => panelBox.Value = h,
+                // It floats over the Board, so a click or scroll on its empty parts must stop here. An empty handler is
+                // what the engine's own dialogs use, and the two fills keep it from tinting on hover.
+                OnClick = static () => { },
+                HoverFill = Tok.FillSolidTertiary,
+                PressedFill = Tok.FillSolidTertiary,
+                BlocksBackgroundScroll = true,
                 Direction = 1,
                 Width = PanelWidth,
                 JustifySelf = FlexAlign.End,

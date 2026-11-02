@@ -18,6 +18,7 @@ sealed record PanelActions(
     Action<Thought, IReadOnlyList<string>> CreatePieces,
     Func<string, (int Done, int Total)> PieceCount,
     Func<string, IReadOnlyList<Connection>> ConnectionsOf,
+    Action<string> OpenMap,
     ConnectionActions Connections,
     IReadSignal<string?> Message);
 
@@ -270,6 +271,7 @@ sealed class ThoughtPanel(PanelActions actions) : Component
                         Children =
                         [
                             new BoxEl { Grow = 1f, Children = [BodyStrong("Notes")] },
+                            Button.Subtle("Map", () => actions.OpenMap(t.Title)),
                             Button.Subtle("Fan out", StartFanOut),
                             Button.Subtle(editing.Value ? "Preview" : "Edit source", () =>
                             {
