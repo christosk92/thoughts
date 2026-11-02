@@ -11,6 +11,7 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <PublishAot>true</PublishAot>
     <NoWarn>$(NoWarn);CA1416</NoWarn>
+    <UserSecretsId>thoughts-app</UserSecretsId>
     <EngineRoot Condition="'$(EngineRoot)' == ''">$(MSBuildThisFileDirectory)..\..\..\fluent-gpu\</EngineRoot>
     <DefaultVaultPath>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\vault'))</DefaultVaultPath>
   </PropertyGroup>

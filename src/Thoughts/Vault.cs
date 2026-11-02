@@ -8,7 +8,7 @@ namespace Thoughts;
 
 enum Status { Inbox, Parked, Next, Doing, Done, Dropped }
 
-sealed record Thought(string Title, Status Status, string? Project, string Body, string Created = "");
+sealed record Thought(string Title, Status Status, string? Project, string Body, string Created = "", bool KeepLocal = false, bool Organized = false);
 
 sealed record BrokenLink(string Note, string Target);
 
@@ -30,6 +30,7 @@ sealed partial class Vault(string root)
     public string Root { get; } = root;
     string ThoughtsDir => Path.Combine(Root, "Thoughts");
     string ProjectsDir => Path.Combine(Root, "Projects");
+    string PeopleDir => Path.Combine(Root, "People");
 
     [GeneratedRegex(@"\[\[(?<target>[^\[\]|#^]*)(?<rest>[|#^][^\[\]]*)?\]\]")]
     private static partial Regex Link();
@@ -42,7 +43,9 @@ sealed partial class Vault(string root)
         foreach (var path in Directory.EnumerateFiles(ThoughtsDir, "*.md"))
         {
             // A note can vanish between listing it and reading it, when it's renamed in Obsidian. The watcher reloads again.
-            if (File.Exists(path)) thoughts.Add(ParseNote(path));
+            if (!File.Exists(path)) continue;
+            var thought = ParseNote(path);
+            thoughts.Add(thought with { Organized = File.Exists(CardPath(thought.Title)) });
         }
         // Newest first by when it was captured, not last written, so a card doesn't move while its note is edited.
         return thoughts.OrderByDescending(t => t.Created, StringComparer.Ordinal)
@@ -57,12 +60,11 @@ sealed partial class Vault(string root)
 
     /// <summary>Saves a new Thought and returns only once it's safely on disk. Never refuses over a name, because
     /// losing a thought is worse: a taken name gets a number.</summary>
-    public void Capture(string text)
+    public string Capture(string text, bool keepLocal = false)
     {
         text = text.Trim();
         Directory.CreateDirectory(ThoughtsDir);
-        string title = CleanName(text.Split('\n')[0]);
-        if (title.Length == 0) title = "Thought";
+        string title = CapturedName(text);
         var taken = TakenNames();
         string name = title;
         for (int n = 2; taken.Contains(name); n++) name = $"{title} {n}";
@@ -70,12 +72,47 @@ sealed partial class Vault(string root)
         var note = new StringBuilder()
             .Append("---\n")
             .Append("status: ").Append(nameof(Status.Inbox)).Append('\n')
+            .Append(keepLocal ? "keep_local: true\n" : "")
             .Append("captured: ").Append(Quote(text)).Append('\n')
             .Append("created: ").Append(DateTime.Now.ToString("yyyy-MM-ddTHH:mm")).Append('\n')
             .Append("---\n")
             .Append(text).Append('\n')
             .ToString();
         WriteDurably(Path.Combine(ThoughtsDir, name + ".md"), note);
+        return name;
+    }
+
+    /// <summary>The name a Thought gets from its first line, before anyone gives it a better one.</summary>
+    public string CapturedName(string text)
+    {
+        string title = CleanName(text.Trim().Split('\n')[0]);
+        return title.Length > 0 ? title : "Thought";
+    }
+
+    public List<string> ReadPeople() =>
+        Directory.Exists(PeopleDir)
+            ? Directory.EnumerateFiles(PeopleDir, "*.md").Select(p => Path.GetFileNameWithoutExtension(p)!)
+                .Order(StringComparer.OrdinalIgnoreCase).ToList()
+            : [];
+
+    public void SetPerson(string title, string person) => SetProperty(ThoughtPath(title), "person", LinkTo(person));
+
+    /// <summary>Turning Keep-local on also deletes what the AI already derived from the note here.</summary>
+    public void SetKeepLocal(string title, bool keepLocal)
+    {
+        SetProperty(ThoughtPath(title), "keep_local", keepLocal ? "true" : null);
+        if (keepLocal) File.Delete(CardPath(title));
+    }
+
+    /// <summary>The app's own store. Obsidian ignores dot folders (ADR 0001).</summary>
+    public string StoreDir => Path.Combine(Root, ".thoughts");
+
+    string CardPath(string title) => Path.Combine(StoreDir, "cards", title + ".json");
+
+    public void SaveCard(string title, string json)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(CardPath(title))!);
+        WriteDurably(CardPath(title), json + "\n", overwrite: true);
     }
 
     public void SetStatus(string title, Status status) => SetProperty(ThoughtPath(title), "status", status.ToString());
@@ -204,6 +241,7 @@ sealed partial class Vault(string root)
         if (!File.Exists(from)) throw new VaultException("That note no longer exists.");
         File.Move(from, Path.Combine(dir, clean + ".md"));
         RewriteLinks(oldName, clean);
+        if (File.Exists(CardPath(oldName))) File.Move(CardPath(oldName), CardPath(clean), overwrite: true);
         return clean;
     }
 
@@ -276,14 +314,21 @@ sealed partial class Vault(string root)
         var status = Status.Inbox;
         string? project = null;
         string created = "";
+        bool keepLocal = false;
         if (TryParseProperties(properties) is { } map)
         {
             if (Scalar(map, "status") is { } value && Enum.TryParse<Status>(value, ignoreCase: true, out var parsed))
                 status = parsed;
             project = LinkTarget(Scalar(map, "project"));
             created = Scalar(map, "created") ?? "";
+            keepLocal = string.Equals(Scalar(map, "keep_local"), "true", StringComparison.OrdinalIgnoreCase);
         }
-        return new Thought(title, status, project, body.Trim(), created);
+        // Properties that can't be read could be hiding a Keep-local flag, so that note stays off the AI too.
+        else if (properties.Length > 0)
+        {
+            keepLocal = true;
+        }
+        return new Thought(title, status, project, body.Trim(), created, keepLocal);
     }
 
     // Obsidian or a sync tool may be writing the same file, so share it, and wait out a moment's lock.

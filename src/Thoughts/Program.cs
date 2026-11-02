@@ -21,6 +21,9 @@ static class Program
         string settingsFile = Arg("--settings") ?? AppSettings.DefaultFile;
         var settings = AppSettings.Load(settingsFile);
         if (Arg("--vault") is { } vault) settings.VaultPath = vault;
+#if DEBUG
+        Organizer.RequestLog = Arg("--ai-log");
+#endif
 
         Tok.Use(Arg("--theme") == "light" ? ThemeKind.Light : ThemeKind.Dark);
 

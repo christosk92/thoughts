@@ -18,6 +18,10 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
     const int ReloadDelayMs = 150;
     const float PanelWidth = 460f;
     const float PanelSlide = 32f;
+    const float StripWidth = 620f;
+    const float CardFooterHeight = 24f; // Reserved on every card, so what the AI adds never changes its height.
+    const string SparkleGlyph = ""; // In Segoe Fluent Icons, but not yet in the engine's Icons.
+    const int SettleMs = 1100; // How long a card the AI just filed stays where it is, so the person sees it change before it moves.
     const int MaxHealthRows = 20;
     const string Unsorted = "Unsorted";
     static readonly Status[] Columns = [Status.Inbox, Status.Parked, Status.Next, Status.Doing, Status.Done];
@@ -40,6 +44,17 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
         var health = UseSignal(LoadHealth(settings.VaultPath));
         var renameField = UseSignal("");
         var selected = UseSignal<string?>(null);
+        var keepLocal = UseSignal(false);
+        var strip = UseSignal<OrganizeOutcome?>(null);
+        var stripOpen = UseSignal(false);
+        var lastCaptured = UseRef<string?>(null);
+        var aiStatus = UseSignal<string?>(null);
+        var keyField = UseSignal("");
+        var keyState = UseSignal(ApiKey.Describe());
+        var organizer = UseRef<Organizer?>(null);
+        var queue = UseSignal(OrganizeQueue.Empty);
+        var settling = UseSignal<IReadOnlyDictionary<string, string>>(new Dictionary<string, string>());
+        var cardKeys = UseRef(new Dictionary<string, string>()); // A card keeps its identity when the AI renames its note.
         var post = UsePost();
         var captureBox = UseRef(NodeHandle.Null);
         var panelBox = UseRef(NodeHandle.Null);
@@ -50,6 +65,7 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
         UseLayoutEffect(() =>
         {
             if (showSettings.Value) return;
+            _ = keepLocal.Value; // Turning on Keep local is the start of typing a Thought, so the keyboard goes back to capture.
             // An open panel takes the keyboard, so Escape reaches it, and closing it hands capture back.
             var host = selected.Value is null ? captureBox.Value : panelBox.Value;
             if (host.IsNull) return;
@@ -144,9 +160,65 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
         void Capture(string text)
         {
             if (string.IsNullOrWhiteSpace(text) || vaultPath.Peek() is null) return;
-            bool saved = false;
-            Change(v => { v.Capture(text); saved = true; }, "Saved to Inbox");
-            if (saved) capture.Value = "";
+            string? saved = null;
+            bool local = keepLocal.Peek();
+            Change(v => saved = v.Capture(text, local), local ? "Saved to Inbox. Kept local." : "Saved to Inbox");
+            if (saved is null) return;
+            capture.Value = "";
+            stripOpen.Value = false;
+            lastCaptured.Value = saved;
+            keepLocal.Value = false;
+            if (!local) organizer.Value?.Enqueue(saved);
+        }
+
+        // The vault's organizer lives as long as that vault is open, and picks up what an earlier run left in its queue.
+        UseEffect(() =>
+        {
+            if (vaultPath.Value is not { } path) return (Action?)null;
+            var running = new Organizer(new Vault(path),
+                () => ApiKey.Find() is { } key ? new AnthropicBackend(key) : null,
+                outcome => post(() =>
+                {
+                    var was = thoughts.Peek().FirstOrDefault(t => t.Title == outcome.Was);
+                    if (outcome.Title != outcome.Was)
+                        cardKeys.Value[outcome.Title] = cardKeys.Value.GetValueOrDefault(outcome.Was, outcome.Was);
+                    settling.Value = new Dictionary<string, string>(settling.Peek()) { [outcome.Title] = was?.Project ?? Unsorted };
+                    _ = Task.Delay(SettleMs).ContinueWith(_ => post(() =>
+                    {
+                        var rest = new Dictionary<string, string>(settling.Peek());
+                        rest.Remove(outcome.Title);
+                        settling.Value = rest;
+                    }));
+                    Reload();
+                    if (selected.Peek() == outcome.Was) selected.Value = outcome.Title;
+                    bool worthShowing = outcome.FiledIn is not null || outcome.Person is not null
+                        || outcome.SuggestedProject is not null || outcome.NewProject is not null;
+                    if (lastCaptured.Value is not null && worthShowing)
+                    {
+                        strip.Value = outcome;
+                        stripOpen.Value = true;
+                    }
+                    lastCaptured.Value = outcome.Title == lastCaptured.Value ? null : lastCaptured.Value;
+                }),
+                text => post(() => aiStatus.Value = text),
+                state => post(() => queue.Value = state));
+            organizer.Value = running;
+            running.Start();
+            return () =>
+            {
+                organizer.Value = null;
+                running.Dispose();
+            };
+        });
+
+        void SaveKey()
+        {
+            string key = keyField.Peek();
+            if (string.IsNullOrWhiteSpace(key)) return;
+            ApiKey.Save(key);
+            keyField.Value = "";
+            keyState.Value = ApiKey.Describe();
+            organizer.Value?.Wake();
         }
 
         void SetStatus(Thought t, Status status)
@@ -172,6 +244,7 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
             moves.Add(MenuFlyoutItem.RadioItem(Unsorted, t.Project is null, () => Change(v => v.SetProject(t.Title, null))));
             items.Add(MenuFlyoutItem.SubMenu("Project", moves));
             items.Add(new MenuFlyoutItem("Rename", Invoke: () => ConfirmRename(t)));
+            items.Add(MenuFlyoutItem.Toggle("Keep local", t.KeepLocal, () => Change(v => v.SetKeepLocal(t.Title, !t.KeepLocal))));
             return items;
         }
 
@@ -236,12 +309,66 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
             },
             Message: message), DepKey.Empty);
 
+        static Element FooterLine(string key, params Element[] children) => new BoxEl
+        {
+            Key = key,
+            Direction = 0,
+            Gap = Spacing.XS,
+            AlignItems = FlexAlign.Center,
+            Shrink = 1f,
+            MinWidth = 0f,
+            Enter = new EnterExit(Opacity: 0f, Active: true),
+            Exit = new EnterExit(Opacity: 0f, Active: true),
+            Transition = MotionTok.ControlNormal,
+            Children = children,
+        };
+
+        static TextEl FooterText(string text) => Caption(text) with { Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, Shrink = 1f, MinWidth = 0f };
+
+        // What the AI is doing with this Thought, or what it did. Always the same height, so nothing moves when it changes.
+        Element CardFooter(Thought t)
+        {
+            var state = queue.Value;
+            Element? line = null;
+            if (t.KeepLocal) line = FooterLine("local", Icon(Icons.Lock, 12f), FooterText("Kept local"));
+            else if (state.Current == t.Title) line = FooterLine("working", ProgressRing.Indeterminate(ProgressRing.MinSize), FooterText("Organizing\u2026"));
+            else if (state.Failed.Contains(t.Title))
+                line = FooterLine("failed", Icon(Icons.Warning, 12f) with { Color = Tok.SystemFillCaution }, FooterText("Couldn't organize"),
+                    HyperlinkButton.Create("Retry", () => organizer.Value?.Enqueue(t.Title)));
+            else if (state.Waiting.Contains(t.Title)) line = FooterLine("waiting", Icon(Icons.Clock, 12f), FooterText("Waiting to organize"));
+            else if (t.Project is not null || t.Organized)
+                line = FooterLine("filed", [
+                    .. t.Project is { } project ? new Element[] { new BoxEl
+                    {
+                        Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f),
+                        Corners = Radii.ControlAll,
+                        Fill = Tok.FillControlSecondary,
+                        BorderColor = Tok.StrokeCardDefault,
+                        BorderWidth = 1f,
+                        Shrink = 1f,
+                        MinWidth = 0f,
+                        Children = [FooterText(project)],
+                    } } : [],
+                    .. t.Organized ? new Element[] { ToolTip.Wrap(Icon(SparkleGlyph, 12f), "Organized by AI") } : [],
+                ]);
+            return new BoxEl
+            {
+                Height = CardFooterHeight,
+                Margin = new Edges4(0f, Spacing.XS, Spacing.S, 0f),
+                Direction = 0,
+                AlignItems = FlexAlign.Center,
+                Children = line is null ? [] : [line],
+            };
+        }
+
         BoxEl Card(Thought t) => new()
         {
-            Key = "card-" + t.Title,
+            Key = "card-" + cardKeys.Value.GetValueOrDefault(t.Title, t.Title),
             Draggable = Drag.Source(ThoughtDrag, () => t),
             Layout = LayoutTransition.Slide,
+            Animate = MotionRecipes.CardResizeHeight,
             Enter = new EnterExit(Sx: 0.96f, Sy: 0.96f, Opacity: 0f, Active: true),
+            Exit = new EnterExit(Opacity: 0f, Active: true),
             Transition = MotionTok.StandardEnter,
             Cursor = CursorId.Hand,
             Role = AutomationRole.Button,
@@ -251,27 +378,45 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
             {
                 if (e.KeyCode is 13 or 32) { selected.Value = t.Title; e.Handled = true; }
             },
-            Direction = 0,
-            Gap = Spacing.XS,
-            AlignItems = FlexAlign.Start,
-            Padding = new Edges4(Spacing.M, Spacing.S, Spacing.XS, Spacing.S),
+            Direction = 1,
+            Padding = new Edges4(Spacing.M, Spacing.S, Spacing.XS, Spacing.XS),
             Fill = Tok.FillCardDefault,
             HoverFill = Tok.FillCardSecondary,
             PressedFill = Tok.FillCardSecondary,
-            BorderColor = selected.Value == t.Title ? Tok.AccentDefault : Tok.StrokeCardDefault,
+            BorderColor = selected.Value == t.Title || settling.Value.ContainsKey(t.Title) ? Tok.AccentDefault : Tok.StrokeCardDefault,
             BorderWidth = 1f,
+            BrushTransitionMs = 167f,
             Corners = Radii.CardAll,
             Children =
             [
                 new BoxEl
                 {
-                    Grow = 1f,
-                    Shrink = 1f,
-                    MinWidth = 0f,
-                    Margin = new Edges4(0f, Spacing.XS, 0f, 0f),
-                    Children = [Body(t.Title) with { MaxLines = 3, Trim = TextTrim.CharacterEllipsis, Shrink = 1f, MinWidth = 0f }],
+                    Direction = 0,
+                    Gap = Spacing.XS,
+                    AlignItems = FlexAlign.Start,
+                    Children =
+                    [
+                        new BoxEl
+                        {
+                            Grow = 1f,
+                            Shrink = 1f,
+                            MinWidth = 0f,
+                            Margin = new Edges4(0f, Spacing.XS, 0f, 0f),
+                            Children =
+                            [
+                                new BoxEl
+                                {
+                                    Key = "title-" + t.Title,
+                                    Enter = new EnterExit(Opacity: 0f, Active: true),
+                                    Transition = MotionTok.ControlNormal,
+                                    Children = [Body(t.Title) with { MaxLines = 3, Trim = TextTrim.CharacterEllipsis, Shrink = 1f, MinWidth = 0f }],
+                                },
+                            ],
+                        },
+                        IconButton.Menu(Icons.More, () => CardMenu(t), toolTip: "Status and Project", size: ControlSize.Small),
+                    ],
                 },
-                IconButton.Menu(Icons.More, () => CardMenu(t), toolTip: "Status and Project", size: ControlSize.Small),
+                CardFooter(t),
             ],
         };
 
@@ -370,9 +515,64 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                             }),
                             HStack(Spacing.S, Button.Standard(renaming.Value is { } r ? $"Rename {r}" : "Add Project", SubmitProject)),
                             new TextEl(message.Value ?? "") { Size = 14f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap },
+                            Subtitle("AI"),
+                            Body(keyState.Value),
+                            PasswordBox.Create(placeholder: "Anthropic API key", width: 420f, password: keyField, onCommit: _ => SaveKey()),
+                            HStack(Spacing.S,
+                                Button.Standard("Save key", SaveKey),
+                                Button.Standard("Remove key", () =>
+                                {
+                                    ApiKey.Remove();
+                                    keyState.Value = ApiKey.Describe();
+                                })),
                             Subtitle("Vault health"),
                             .. HealthRows(health.Value),
                         ]))),
+                ],
+            };
+        }
+
+        Element StripContent()
+        {
+            if (strip.Peek() is not { } found) return new BoxEl();
+            string filedText = found.FiledIn is { } inProject ? $"Filed in {inProject}" : "";
+            if (found.Person is { } about) filedText += (filedText.Length > 0 ? ", about " : "About ") + about;
+            var actions = new List<Element>();
+            if (found.SuggestedProject is { } suggested)
+                actions.Add(Button.Standard($"Move to {suggested}", () =>
+                {
+                    Change(v => v.SetProject(found.Title, suggested));
+                    stripOpen.Value = false;
+                }));
+            if (found.NewProject is { } brandNew)
+                actions.Add(Button.Standard($"Create {brandNew}", () =>
+                {
+                    Change(v =>
+                    {
+                        v.AddProject(brandNew);
+                        v.SetProject(found.Title, brandNew);
+                    });
+                    stripOpen.Value = false;
+                }));
+            actions.Add(new BoxEl { Grow = 1f });
+            actions.Add(Button.Subtle("Open", () =>
+            {
+                selected.Value = found.Title;
+                stripOpen.Value = false;
+            }));
+            actions.Add(IconButton.Create(Icons.Cancel, () => stripOpen.Value = false, size: ControlSize.Small));
+            return new BoxEl
+            {
+                Direction = 1,
+                Gap = Spacing.S,
+                Width = StripWidth,
+                Padding = Edges4.All(Spacing.M),
+                Children =
+                [
+                    new TextEl(found.Title) { Size = 14f, Weight = 600, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, Shrink = 1f, MinWidth = 0f },
+                    filedText.Length > 0 ? Caption(filedText) : new BoxEl { Visible = false },
+                    found.Why is { Length: > 0 } why ? Body(why) : new BoxEl { Visible = false },
+                    new BoxEl { Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, Children = actions.ToArray() },
                 ],
             };
         }
@@ -401,7 +601,7 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
         foreach (var name in rowNames)
         {
             if (filter.Value is { } only && only != name) continue;
-            var inRow = all.Where(t => (t.Project ?? Unsorted) == name).ToList();
+            var inRow = all.Where(t => (settling.Value.GetValueOrDefault(t.Title) ?? t.Project ?? Unsorted) == name).ToList();
             rows.Add(new BoxEl
             {
                 Key = "row-" + name,
@@ -443,7 +643,8 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                     AlignItems = FlexAlign.Center,
                     Children =
                     [
-                        new BoxEl
+                        // A popup anchored to capture, so suggestions arriving seconds later move nothing, and typing carries on.
+                        Popup.Create(new BoxEl
                         {
                             Key = "capture",
                             OnRealized = h => captureBox.Value = h,
@@ -456,8 +657,10 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                                     OnCommit = Capture,
                                 }),
                             ],
-                        },
+                        }, StripContent, stripOpen, null, FlyoutPlacement.BottomEdgeAlignedLeft,
+                            new PopupOptions(FocusTrap: false, DismissBehavior: DismissBehavior.None) { PreserveFocusOnOpen = true }),
                         Button.Accent("Add", () => Capture(capture.Peek())),
+                        ToggleButton.Create("Keep local", keepLocal),
                         // The slot is always there, so a message appearing moves nothing.
                         new BoxEl
                         {
@@ -465,7 +668,7 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                             Grow = 1f,
                             Shrink = 1f,
                             MinWidth = 0f,
-                            Children = [new TextEl(message.Value ?? "") { Size = 14f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, Shrink = 1f, MinWidth = 0f }],
+                            Children = [new TextEl(string.Join(' ', new[] { message.Value, aiStatus.Value }.Where(s => s is not null))) { Size = 14f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, Shrink = 1f, MinWidth = 0f }],
                         },
                         Button.Standard(health.Value.Issues switch
                         {
