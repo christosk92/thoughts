@@ -19,9 +19,9 @@ sealed record OrganizeQueue(string? Current, IReadOnlyList<string> Waiting, IRea
 /// <summary>Organizes new Thoughts in the background. Capture has already saved the note, so nothing here can lose one: a
 /// failure leaves the Thought in the queue on disk to try again, including after a restart. Keep-local Thoughts are
 /// checked again immediately before sending and are never sent.</summary>
-sealed class Organizer(Vault vault, Func<IModelBackend?> backend, Action<OrganizeOutcome> done, Action<string?> status, Action<OrganizeQueue> queue, UsageLog usage, Func<double> budget, Action<string> connected) : IDisposable
+sealed class Organizer(Vault vault, Func<IModelBackend?> backend, Action<OrganizeOutcome> done, Action<string?> status, Action<OrganizeQueue> queue, UsageLog usage, Func<double> budget, Action<string> connected, AppSettings settings) : IDisposable
 {
-    const string Model = "claude-sonnet-5-5";
+    const int MaxRelatedLinks = 3;
     const int MaxTokens = 2000;
     const int MaxCandidates = 300;
     const int SnippetLength = 200;
@@ -106,7 +106,7 @@ sealed class Organizer(Vault vault, Func<IModelBackend?> backend, Action<Organiz
         if (backend() is not { } model) return new FanOutAnswer(lines, "AI is off, so pick the lines yourself.");
         try
         {
-            var request = new ModelRequest(Model, FanOut.SystemPrompt, FanOut.UserTurn(segments), FanOut.Schema, FanOut.MaxTokens);
+            var request = new ModelRequest(settings.FanOutModel, InLanguage(FanOut.SystemPrompt), FanOut.UserTurn(segments), FanOut.Schema, FanOut.MaxTokens);
             var reply = await model.Complete(request, _stop.Token);
             usage.Record("Fan out", request, reply);
             if (reply.Json is null) return new FanOutAnswer(lines, (reply.Declined ?? "The AI gave no answer.") + " Pick the lines yourself.");
@@ -236,7 +236,7 @@ sealed class Organizer(Vault vault, Func<IModelBackend?> backend, Action<Organiz
         string user = BuildUserTurn(note, projects, people, candidates);
         if (RequestLog is { } log) File.AppendAllText(log, user + "\n");
 
-        var request = new ModelRequest(Model, SystemPrompt, user, Schema, MaxTokens);
+        var request = new ModelRequest(settings.OrganizeModel, InLanguage(SystemPrompt), user, Schema, MaxTokens);
         var reply = await model.Complete(request, _stop.Token);
         usage.Record("Organize", request, reply);
         if (RequestLog is { } usageLog)
@@ -266,6 +266,12 @@ sealed class Organizer(Vault vault, Func<IModelBackend?> backend, Action<Organiz
         if (nearby.Count > 0) Enqueue(ConnectPrefix + title + "\t" + string.Join('\t', nearby));
     }
 
+    // Added at the end, so the prompt only stops matching the cache for someone who sets this.
+    string InLanguage(string prompt) =>
+        settings.Language is { Length: > 0 } language
+            ? prompt + "\n\nOverride: write every title, \"why\", mechanism, consequence and extra premise in " + language + ", whatever language the Thought is in. Cards are still always in English."
+            : prompt;
+
     async Task FindConnections(string title, List<string> nearby)
     {
         var note = vault.ReadThoughts().FirstOrDefault(t => t.Title == title);
@@ -279,7 +285,7 @@ sealed class Organizer(Vault vault, Func<IModelBackend?> backend, Action<Organiz
         if (others.Count == 0) return;
         var model = backend() ?? throw new ModelException(ModelFailure.NoKey, "No API key.");
 
-        var request = new ModelRequest(Connect.Model, Connect.SystemPrompt, Connect.UserTurn(note, others), Connect.Schema, Connect.MaxTokens, "high");
+        var request = new ModelRequest(settings.ConnectModel, InLanguage(Connect.SystemPrompt), Connect.UserTurn(note, others), Connect.Schema, Connect.MaxTokens, "high");
         if (RequestLog is { } log) File.AppendAllText(log, "CONNECT " + request.User + "\n");
         var reply = await model.Complete(request, _stop.Token);
         usage.Record("Connect", request, reply);
@@ -289,7 +295,7 @@ sealed class Organizer(Vault vault, Func<IModelBackend?> backend, Action<Organiz
         int added = 0;
         foreach (var claim in Connect.Read(reply.Json, note, others))
         {
-            var check = new ModelRequest(Connect.Model, Connect.CheckPrompt, Connect.CheckTurn(note, claim), Connect.CheckSchema, Connect.CheckMaxTokens);
+            var check = new ModelRequest(settings.CheckModel, Connect.CheckPrompt, Connect.CheckTurn(note, claim), Connect.CheckSchema, Connect.CheckMaxTokens);
             var verdict = await model.Complete(check, _stop.Token);
             usage.Record("Check", check, verdict);
             if (RequestLog is { } checkLog) File.AppendAllText(checkLog, $"CHECK {claim.Other.Title}: {verdict.Json}\n");
@@ -302,6 +308,16 @@ sealed class Organizer(Vault vault, Func<IModelBackend?> backend, Action<Organiz
             vault.AddConnection(title, claim.Other.Title, claim.Kind, claim.Explanation());
             added++;
         }
+        // Coarse: what's left of the nearby notes becomes plain related links, which also show in Obsidian's graph.
+        if (settings.Coarse)
+        {
+            var answered = vault.ReadConnections();
+            foreach (var other in others.Where(o => !answered.Any(c => c.Involves(title) && c.Involves(o.Title))).Take(MaxRelatedLinks))
+            {
+                vault.AddConnection(title, other.Title, Connection.RelatedKind, "");
+                added++;
+            }
+        }
         if (added > 0) connected(title);
     }
 
@@ -311,7 +327,7 @@ sealed class Organizer(Vault vault, Func<IModelBackend?> backend, Action<Organiz
         if (note is null || note.KeepLocal) return;
         var model = backend() ?? throw new ModelException(ModelFailure.NoKey, "No API key.");
         var candidates = vault.ReadThoughts().Where(t => t.Title != title && !t.KeepLocal && t.Status != Status.Dropped).Take(MaxCandidates).ToList();
-        var request = new ModelRequest(Model, SystemPrompt, BuildUserTurn(note, vault.ReadProjects(), vault.ReadPeople(), candidates), Schema, MaxTokens);
+        var request = new ModelRequest(settings.OrganizeModel, InLanguage(SystemPrompt), BuildUserTurn(note, vault.ReadProjects(), vault.ReadPeople(), candidates), Schema, MaxTokens);
         var reply = await model.Complete(request, _stop.Token);
         usage.Record("Refresh card", request, reply);
         if (reply.Json is null) return; // The old card still works, and the next Build on tries again.

@@ -19,7 +19,6 @@ sealed record ConnectClaim(Thought Other, string Kind, string AnchorThis, string
 /// fresh call that never saw the reasoning tries to reject each claim.</summary>
 static class Connect
 {
-    public const string Model = "claude-opus-5-5";
     public const int MaxTokens = 8000;
     public const int CheckMaxTokens = 2000;
     public const int MaxConnections = 3;

@@ -231,7 +231,8 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                 {
                     Reload();
                     if (strip.Peek()?.Title == title) stripOpen.Value = true;
-                }));
+                }),
+                settings);
             organizer.Value = running;
             running.Start();
             return () =>
@@ -663,6 +664,10 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                                     ApiKey.Remove();
                                     keyState.Value = ApiKey.Describe();
                                 })),
+                            Embed.Comp(() => new AiSettingsSection(settings, () =>
+                            {
+                                if (canSave) settings.Save(settingsFile);
+                            })),
                             Subtitle("Vault health"),
                             .. HealthRows(health.Value),
                         ]))),

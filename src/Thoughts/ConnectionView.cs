@@ -45,7 +45,7 @@ static class ConnectionView
             Children =
             [
                 HyperlinkButton.Create(other, () => actions.Open(other)) with { Margin = new Edges4(LinkInset, 0f, 0f, 0f) },
-                Body(paragraphs.FirstOrDefault() ?? "") with { Wrap = TextWrap.Wrap },
+                c.Kind == Connection.RelatedKind ? Caption("Related") with { Color = Tok.TextSecondary } : Body(paragraphs.FirstOrDefault() ?? "") with { Wrap = TextWrap.Wrap },
                 .. evidence,
                 .. c.State == ConnectionState.Suggested
                     ? new Element[]
@@ -58,7 +58,7 @@ static class ConnectionView
                             Children =
                             [
                                 Button.Accent("Accept", () => actions.Accept(c)),
-                                Button.Standard("Build on it", () => actions.BuildOn(c)),
+                                c.Kind == Connection.RelatedKind ? new BoxEl { Visible = false } : Button.Standard("Build on it", () => actions.BuildOn(c)),
                                 Button.Subtle("Dismiss", () => actions.Dismiss(c)),
                             ],
                         },

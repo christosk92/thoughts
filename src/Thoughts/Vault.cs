@@ -19,6 +19,9 @@ sealed record PendingSuggestion(string? Project, string? NewProject, string? Why
 
 sealed record Connection(string Name, string A, string B, ConnectionState State, string Kind, string Explanation)
 {
+    /// <summary>A plain related link from Coarse Granularity. It has no sentence, so nothing can be built on it.</summary>
+    public const string RelatedKind = "related";
+
     public bool Involves(string title) => string.Equals(A, title, StringComparison.OrdinalIgnoreCase) || string.Equals(B, title, StringComparison.OrdinalIgnoreCase);
 
     public string OtherThan(string title) => string.Equals(A, title, StringComparison.OrdinalIgnoreCase) ? B : A;

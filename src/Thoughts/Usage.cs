@@ -87,7 +87,9 @@ static class ModelPrices
     {
         var (input, output, cacheRead, cacheWrite) = model switch
         {
+            "claude-haiku-5-5" => (0.10, 0.50, 0.01, 0.125),
             "claude-sonnet-5-5" => (2.00, 10.00, 0.20, 2.50),
+            "claude-fable-5-1" => (10.00, 50.00, 0.25, 12.50),
             _ => (4.00, 20.00, 0.20, 5.00), // Opus 5.5. A model this table doesn't know yet counts as the dearer one, so the Budget errs on the safe side.
         };
         return (reply.InputTokens * input + reply.OutputTokens * output

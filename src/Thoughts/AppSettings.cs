@@ -12,6 +12,17 @@ sealed class AppSettings
     /// <summary>US dollars a month the AI may spend. Reaching it pauses AI work, never capture.</summary>
     public double BudgetUsd { get; set; } = 20;
 
+    /// <summary>Fine suggests only Connections. Coarse also suggests plain related links with no sentence.</summary>
+    public bool Coarse { get; set; }
+
+    /// <summary>The language for titles and explanations. Null follows each Thought. Cards are always English.</summary>
+    public string? Language { get; set; }
+
+    public string OrganizeModel { get; set; } = "claude-sonnet-5-5";
+    public string ConnectModel { get; set; } = "claude-opus-5-5";
+    public string CheckModel { get; set; } = "claude-opus-5-5";
+    public string FanOutModel { get; set; } = "claude-sonnet-5-5";
+
     public static string DefaultFile => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Thoughts", "settings.json");
 
