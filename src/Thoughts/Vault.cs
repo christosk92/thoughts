@@ -8,6 +8,9 @@ namespace Thoughts;
 
 enum Status { Inbox, Parked, Next, Doing, Done, Dropped }
 
+/// <summary>What Build on changed, enough to put it all back.</summary>
+sealed record BuildOnUndo(string Source, string SourceNote, string? SourceCard, string Target, string Added, string? TargetCard);
+
 sealed record Thought(string Title, Status Status, string? Project, string Body, string Created = "", bool KeepLocal = false, bool Organized = false);
 
 sealed record BrokenLink(string Note, string Target);
@@ -113,6 +116,66 @@ sealed partial class Vault(string root)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(CardPath(title))!);
         WriteDurably(CardPath(title), json + "\n", overwrite: true);
+    }
+
+    public string? ReadCard(string title) => File.Exists(CardPath(title)) ? File.ReadAllText(CardPath(title)) : null;
+
+    /// <summary>Adds a <c>from</c> link and keeps any it already has, as a block list.</summary>
+    public void AddFrom(string title, string target)
+    {
+        string path = ThoughtPath(title);
+        if (!File.Exists(ThoughtPath(target))) throw new VaultException($"{target} no longer exists.");
+        if (!File.Exists(path)) throw new VaultException("That note no longer exists.");
+        var (properties, _) = SplitNote(ReadNote(path).Replace("\r\n", "\n"));
+        var lines = properties.Split('\n');
+        int at = Array.FindIndex(lines, l => l.StartsWith("from:", StringComparison.Ordinal));
+        var items = new List<string>();
+        for (int i = at + 1; at >= 0 && i < lines.Length && (lines[i].StartsWith(' ') || lines[i].StartsWith('-')); i++)
+            items.Add(lines[i].TrimStart(' ', '-'));
+        string link = LinkTo(target);
+        if (items.Contains(link)) return;
+        items.Add(link);
+        SetProperty(path, "from", string.Concat(items.Select(item => $"\n  - {item}")));
+    }
+
+    /// <summary>Moves a Thought's words to the end of another Thought's body and removes the first note. The target is
+    /// written first, so a failure can't lose the words. What it returns puts everything back.</summary>
+    public BuildOnUndo BuildOn(string source, string target)
+    {
+        string sourcePath = ThoughtPath(source);
+        if (!File.Exists(sourcePath)) throw new VaultException($"{source} no longer exists.");
+        if (!File.Exists(ThoughtPath(target))) throw new VaultException($"{target} no longer exists.");
+        string sourceNote = ReadNote(sourcePath);
+        string added = SplitNote(sourceNote.Replace("\r\n", "\n")).Body.Trim();
+        var undo = new BuildOnUndo(source, sourceNote, ReadCard(source), target, added, ReadCard(target));
+        string body = SplitNote(ReadNote(ThoughtPath(target)).Replace("\r\n", "\n")).Body.TrimEnd();
+        SetBody(target, body + "\n\n" + added);
+        File.Delete(sourcePath);
+        File.Delete(CardPath(source));
+        return undo;
+    }
+
+    /// <summary>False means the person has since changed that text in the target, so it stays there for them to
+    /// sort out. The first note comes back either way, because its words must never be lost.</summary>
+    public bool UndoBuildOn(BuildOnUndo undo)
+    {
+        RequireFreeName(undo.Source);
+        bool removed = false;
+        if (File.Exists(ThoughtPath(undo.Target)))
+        {
+            string body = SplitNote(ReadNote(ThoughtPath(undo.Target)).Replace("\r\n", "\n")).Body.TrimEnd();
+            string tail = "\n\n" + undo.Added;
+            if (body.EndsWith(tail, StringComparison.Ordinal))
+            {
+                SetBody(undo.Target, body[..^tail.Length]);
+                if (undo.TargetCard is { } targetCard) WriteDurably(CardPath(undo.Target), targetCard, overwrite: true);
+                else File.Delete(CardPath(undo.Target));
+                removed = true;
+            }
+        }
+        WriteDurably(ThoughtPath(undo.Source), undo.SourceNote, overwrite: false);
+        if (undo.SourceCard is { } sourceCard) WriteDurably(CardPath(undo.Source), sourceCard, overwrite: true);
+        return removed;
     }
 
     public void SetStatus(string title, Status status) => SetProperty(ThoughtPath(title), "status", status.ToString());
@@ -402,7 +465,7 @@ sealed partial class Vault(string root)
             while (end < lines.Count && (lines[end].StartsWith(' ') || lines[end].StartsWith('-'))) end++;
             lines.RemoveRange(at, end - at);
         }
-        if (value is not null) lines.Insert(at >= 0 ? at : lines.Count, $"{key}: {value}");
+        if (value is not null) lines.Insert(at >= 0 ? at : lines.Count, value.StartsWith('\n') ? key + ":" + value : $"{key}: {value}");
 
         string changed = string.Join('\n', lines);
         if (changed.Length > 0 && TryParseProperties(changed) is null)

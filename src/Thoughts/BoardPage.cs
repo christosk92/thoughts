@@ -47,6 +47,7 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
         var keepLocal = UseSignal(false);
         var strip = UseSignal<OrganizeOutcome?>(null);
         var stripOpen = UseSignal(false);
+        var builtOn = UseSignal<BuildOnUndo?>(null);
         var lastCaptured = UseRef<string?>(null);
         var aiStatus = UseSignal<string?>(null);
         var keyField = UseSignal("");
@@ -169,6 +170,7 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
             if (saved is null) return;
             capture.Value = "";
             stripOpen.Value = false;
+            builtOn.Value = null;
             lastCaptured.Value = saved;
             keepLocal.Value = false;
             if (!local) organizer.Value?.Enqueue(saved);
@@ -202,7 +204,7 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                     Reload();
                     if (selected.Peek() == outcome.Was) selected.Value = outcome.Title;
                     bool worthShowing = outcome.FiledIn is not null || outcome.Person is not null
-                        || outcome.SuggestedProject is not null || outcome.NewProject is not null;
+                        || outcome.SuggestedProject is not null || outcome.NewProject is not null || outcome.Relation is not null;
                     if (lastCaptured.Value is not null && worthShowing)
                     {
                         strip.Value = outcome;
@@ -230,6 +232,32 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
             settings.BudgetUsd = amount;
             if (canSave) settings.Save(settingsFile);
             organizer.Value?.Wake();
+        }
+
+        void AddAsDetail(string source, string target)
+        {
+            BuildOnUndo? undo = null;
+            Change(v => undo = v.BuildOn(source, target));
+            if (undo is null) return;
+            if (selected.Peek() == source) selected.Value = target;
+            organizer.Value?.EnqueueRefresh(target);
+            builtOn.Value = undo;
+        }
+
+        void UndoBuildOn(BuildOnUndo undo)
+        {
+            bool removed = true;
+            Change(v => removed = v.UndoBuildOn(undo),
+                null);
+            if (!removed) message.Value = $"{undo.Source} is back. Its words are still in {undo.Target}, because that note changed.";
+            builtOn.Value = null;
+            stripOpen.Value = false;
+        }
+
+        void LinkAsNewWork(string source, string target)
+        {
+            Change(v => v.AddFrom(source, target));
+            stripOpen.Value = false;
         }
 
         void SaveKey()
@@ -561,6 +589,21 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
 
         Element StripContent()
         {
+            if (builtOn.Value is { } added)
+                return new BoxEl
+                {
+                    Direction = 0,
+                    Gap = Spacing.S,
+                    Width = StripWidth,
+                    Padding = Edges4.All(Spacing.M),
+                    AlignItems = FlexAlign.Center,
+                    Children =
+                    [
+                        new BoxEl { Grow = 1f, Shrink = 1f, MinWidth = 0f, Children = [Body($"Added to {added.Target}") with { MaxLines = 1, Trim = TextTrim.CharacterEllipsis, Shrink = 1f, MinWidth = 0f }] },
+                        Button.Standard("Undo", () => UndoBuildOn(added)),
+                        IconButton.Create(Icons.Cancel, () => stripOpen.Value = false, size: ControlSize.Small),
+                    ],
+                };
             if (strip.Peek() is not { } found) return new BoxEl();
             string filedText = found.FiledIn is { } inProject ? $"Filed in {inProject}" : "";
             if (found.Person is { } about) filedText += (filedText.Length > 0 ? ", about " : "About ") + about;
@@ -581,6 +624,18 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                     });
                     stripOpen.Value = false;
                 }));
+            if (found.Relation is { } relation)
+            {
+                Element addDetail = relation.MoreDetail
+                    ? Button.Accent("Add as detail", () => AddAsDetail(found.Title, relation.Target))
+                    : Button.Standard("Add as detail", () => AddAsDetail(found.Title, relation.Target));
+                Element newWork = relation.MoreDetail
+                    ? Button.Standard("Keep as new work", () => LinkAsNewWork(found.Title, relation.Target))
+                    : Button.Accent("Keep as new work", () => LinkAsNewWork(found.Title, relation.Target));
+                actions.Add(relation.MoreDetail ? addDetail : newWork);
+                actions.Add(relation.MoreDetail ? newWork : addDetail);
+                actions.Add(Button.Subtle("Unrelated", () => stripOpen.Value = false));
+            }
             actions.Add(new BoxEl { Grow = 1f });
             actions.Add(Button.Subtle("Open", () =>
             {
@@ -599,6 +654,12 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                     new TextEl(found.Title) { Size = 14f, Weight = 600, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, Shrink = 1f, MinWidth = 0f },
                     filedText.Length > 0 ? Caption(filedText) : new BoxEl { Visible = false },
                     found.Why is { Length: > 0 } why ? Body(why) : new BoxEl { Visible = false },
+                    found.Relation is { } related
+                        ? VStack(Spacing.XS,
+                            BodyStrong(related.MoreDetail ? $"More detail on {related.Target}" : $"Grew from {related.Target}") with { MaxLines = 1, Trim = TextTrim.CharacterEllipsis, Shrink = 1f, MinWidth = 0f },
+                            Body(related.Why),
+                            Caption($"\u201C{related.Evidence}\u201D") with { Color = Tok.TextSecondary })
+                        : new BoxEl { Visible = false },
                     new BoxEl { Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, Children = actions.ToArray() },
                 ],
             };
