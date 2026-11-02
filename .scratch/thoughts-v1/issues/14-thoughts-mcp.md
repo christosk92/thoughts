@@ -23,11 +23,11 @@
 
 Verified 2026-11-02 on throwaway vaults. The server is an 8 MB Debug NativeAOT publish with no warnings. A throwaway driver outside the repo spoke the real JSON-RPC over stdio, and 31 of 31 checks passed: the handshake, tools and prompt, refusals with the switch off, a bad answer refused, a rename once, a new Project waiting for confirmation, Status and words untouched, an invented id and a false quote dropped, a held check saved as Suggested, claims going back after expiry and not offered twice, and Keep-local absent from data and search. The answers in those checks were written by the driver, so no model did the reasoning.
 
-**Not verified: a real Claude Code session.** Claude Code's login on this PC had expired ("OAuth session expired and could not be refreshed"), and the owner was away. Signing in is theirs to do, and using their Thoughts API key to get around it wasn't something they'd agreed to. So how a real client negotiates the protocol, and how a real model follows these work packages, are both unproven, including how it treats the fake note that tries to hijack the session. To run it, after `/login`:
+**Not verified: a real Claude Code session.** Claude Code's login on this PC had expired ("OAuth session expired and could not be refreshed"), and the owner was away. Signing in is theirs to do, and using their Thoughts API key to get around it wasn't something they'd agreed to. So how a real client negotiates the protocol, and how a real model follows these work packages, are both unproven, including how it treats the fake note that tries to hijack the session. To run it, sign in to Claude Code, then run the throwaway script at `C:/WAVEE/scratch/thoughts-mcp-real-run.py`, which uses only fake notes and only this server's tools:
 
-    python mcp_real.py     # or the commands in docs/mcp.md, on a throwaway vault
+    python -I C:/WAVEE/scratch/thoughts-mcp-real-run.py
 
-That script is throwaway and isn't in the repo. It should be rebuilt from docs/mcp.md, with a fake note containing an instruction.
+It isn't in the repo. It includes a fake note that tries to take over the session.
 
 In the app, with an API key set, a Thought in the Caller line stayed untouched: no usage and the queue unchanged. Its card says "Waiting for a Caller", the Board says how many, and "Organize with API key" is in its menu.
 
