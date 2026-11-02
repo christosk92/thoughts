@@ -2,7 +2,7 @@
 
 Drop in any thought, circle back on it, and work on it. A Windows desktop app on [FluentGpu](https://github.com/christosk92/fluent-gpu), over an Obsidian vault: every Thought is a plain Markdown note that stays readable without the app.
 
-**Status:** early. Capture and the Board work, including drag and drop. The AI features aren't built yet. See [the design](docs/design.md) and [the tickets](.scratch/thoughts-v1/issues).
+**Status:** early. Capture, the Board with drag and drop, Obsidian sync and the panel with Markdown editing work. The AI features aren't built yet. See [the design](docs/design.md) and [the tickets](.scratch/thoughts-v1/issues).
 
 ## What it will do
 
@@ -15,7 +15,7 @@ Drop in any thought, circle back on it, and work on it. A Windows desktop app on
 
 ## Build
 
-Needs Windows and the .NET 10 SDK. Clone [fluent-gpu](https://github.com/christosk92/fluent-gpu) beside this repo. Until [fluent-gpu#63](https://github.com/christosk92/fluent-gpu/pull/63) merges, use its `feat/harness-queue-input` branch.
+Needs Windows and the .NET 10 SDK. Clone [fluent-gpu](https://github.com/christosk92/fluent-gpu) beside this repo.
 
 ```powershell
 dotnet run --project src/Thoughts

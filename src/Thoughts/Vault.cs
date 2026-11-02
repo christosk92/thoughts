@@ -8,7 +8,7 @@ namespace Thoughts;
 
 enum Status { Inbox, Parked, Next, Doing, Done, Dropped }
 
-sealed record Thought(string Title, Status Status, string? Project, string Body);
+sealed record Thought(string Title, Status Status, string? Project, string Body, string Created = "");
 
 sealed record BrokenLink(string Note, string Target);
 
@@ -38,13 +38,15 @@ sealed partial class Vault(string root)
     public List<Thought> ReadThoughts()
     {
         if (!Directory.Exists(ThoughtsDir)) return [];
-        var thoughts = new List<(DateTime Written, Thought Thought)>();
+        var thoughts = new List<Thought>();
         foreach (var path in Directory.EnumerateFiles(ThoughtsDir, "*.md"))
         {
             // A note can vanish between listing it and reading it, when it's renamed in Obsidian. The watcher reloads again.
-            if (File.Exists(path)) thoughts.Add((File.GetLastWriteTimeUtc(path), ParseNote(path)));
+            if (File.Exists(path)) thoughts.Add(ParseNote(path));
         }
-        return thoughts.OrderByDescending(t => t.Written).Select(t => t.Thought).ToList();
+        // Newest first by when it was captured, not last written, so a card doesn't move while its note is edited.
+        return thoughts.OrderByDescending(t => t.Created, StringComparer.Ordinal)
+            .ThenBy(t => t.Title, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     public List<string> ReadProjects() =>
@@ -81,7 +83,18 @@ sealed partial class Vault(string root)
     public void SetProject(string title, string? project) =>
         SetProperty(ThoughtPath(title), "project", project is null ? null : LinkTo(project));
 
-    public void RenameThought(string oldName, string newName) => RenameNote(ThoughtsDir, oldName, newName);
+    /// <summary>The person's words, replacing the body. The properties stay exactly as they are, even if they don't parse.</summary>
+    public void SetBody(string title, string body)
+    {
+        string path = ThoughtPath(title);
+        if (!File.Exists(path)) throw new VaultException("That note no longer exists.");
+        string content = ReadNote(path).Replace("\r\n", "\n");
+        var (_, oldBody) = SplitNote(content);
+        string properties = content[..(content.Length - oldBody.Length)];
+        WriteDurably(path, properties + body.Replace("\r\n", "\n").TrimEnd() + "\n", overwrite: true);
+    }
+
+    public string RenameThought(string oldName, string newName) => RenameNote(ThoughtsDir, oldName, newName);
 
     public void AddProject(string name)
     {
@@ -180,10 +193,10 @@ sealed partial class Vault(string root)
     // Relaxed, so a query in graph.json reads as ["status":Doing] when someone opens the file.
     static readonly JsonSerializerOptions s_indented = new() { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
-    void RenameNote(string dir, string oldName, string newName)
+    string RenameNote(string dir, string oldName, string newName)
     {
         string clean = CleanName(newName);
-        if (clean == oldName) return;
+        if (clean == oldName) return oldName;
         // Changing only the case keeps the same name as far as the file system and links are concerned.
         if (!string.Equals(clean, oldName, StringComparison.OrdinalIgnoreCase)) RequireFreeName(clean);
         if (clean.Length == 0) throw new VaultException("A note needs a name.");
@@ -191,6 +204,7 @@ sealed partial class Vault(string root)
         if (!File.Exists(from)) throw new VaultException("That note no longer exists.");
         File.Move(from, Path.Combine(dir, clean + ".md"));
         RewriteLinks(oldName, clean);
+        return clean;
     }
 
     // A rename made here is invisible to Obsidian, so every link in the vault is this method's job: links in properties,
@@ -251,7 +265,7 @@ sealed partial class Vault(string root)
         }
     }
 
-    string ThoughtPath(string title) => Path.Combine(ThoughtsDir, title + ".md");
+    public string ThoughtPath(string title) => Path.Combine(ThoughtsDir, title + ".md");
 
     static string LinkTo(string name) => Quote($"[[{name}]]");
 
@@ -261,13 +275,15 @@ sealed partial class Vault(string root)
         var (properties, body) = SplitNote(ReadNote(path).Replace("\r\n", "\n"));
         var status = Status.Inbox;
         string? project = null;
+        string created = "";
         if (TryParseProperties(properties) is { } map)
         {
             if (Scalar(map, "status") is { } value && Enum.TryParse<Status>(value, ignoreCase: true, out var parsed))
                 status = parsed;
             project = LinkTarget(Scalar(map, "project"));
+            created = Scalar(map, "created") ?? "";
         }
-        return new Thought(title, status, project, body.Trim());
+        return new Thought(title, status, project, body.Trim(), created);
     }
 
     // Obsidian or a sync tool may be writing the same file, so share it, and wait out a moment's lock.

@@ -16,6 +16,8 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
     const string ThoughtDrag = "thought";
     const float DialogFieldWidth = 272f; // ContentDialog's narrowest width less its padding, and TextBox has no fill mode.
     const int ReloadDelayMs = 150;
+    const float PanelWidth = 460f;
+    const float PanelSlide = 32f;
     const int MaxHealthRows = 20;
     const string Unsorted = "Unsorted";
     static readonly Status[] Columns = [Status.Inbox, Status.Parked, Status.Next, Status.Doing, Status.Done];
@@ -37,16 +39,21 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
         var dropOver = UseSignal<string?>(null);
         var health = UseSignal(LoadHealth(settings.VaultPath));
         var renameField = UseSignal("");
+        var selected = UseSignal<string?>(null);
         var post = UsePost();
         var captureBox = UseRef(NodeHandle.Null);
+        var panelBox = UseRef(NodeHandle.Null);
         var hooks = UseContext(InputHooks.Current);
         var overlay = UseContext(Overlay.Service);
 
         // Open and type: capture is the first thing the app is for.
         UseLayoutEffect(() =>
         {
-            if (showSettings.Value || captureBox.Value.IsNull) return;
-            var first = hooks.FirstFocusableIn?.Invoke(captureBox.Value) ?? NodeHandle.Null;
+            if (showSettings.Value) return;
+            // An open panel takes the keyboard, so Escape reaches it, and closing it hands capture back.
+            var host = selected.Value is null ? captureBox.Value : panelBox.Value;
+            if (host.IsNull) return;
+            var first = hooks.FirstFocusableIn?.Invoke(host) ?? NodeHandle.Null;
             if (!first.IsNull) hooks.FocusNode?.Invoke(first, false);
         });
 
@@ -179,7 +186,11 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                 d.CloseText = "Cancel";
                 d.Closed = result =>
                 {
-                    if (result == ContentDialogResult.Primary) Change(v => v.RenameThought(t.Title, renameField.Peek()));
+                    if (result != ContentDialogResult.Primary) return;
+                    // The panel follows the note, so it needs the name the vault settled on.
+                    string? renamed = null;
+                    Change(v => renamed = v.RenameThought(t.Title, renameField.Peek()));
+                    if (renamed is not null && selected.Peek() == t.Title) selected.Value = renamed;
                 };
             });
         }
@@ -209,6 +220,22 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                 Move(t, status ?? t.Status, project ?? t.Project ?? Unsorted);
             });
 
+        var panelActions = UseMemo(() => new PanelActions(
+            Close: () => selected.Value = null,
+            SetStatus: SetStatus,
+            SaveBody: (title, body) => Change(v => v.SetBody(title, body)),
+            FollowLink: target =>
+            {
+                var linked = thoughts.Peek().FirstOrDefault(x => string.Equals(x.Title, target, StringComparison.OrdinalIgnoreCase));
+                if (linked is not null) selected.Value = linked.Title;
+                else message.Value = $"{target} isn't a Thought. Open it in Obsidian.";
+            },
+            OpenInObsidian: title =>
+            {
+                if (vaultPath.Peek() is { } path) hooks.OpenUri?.Invoke("obsidian://open?path=" + Uri.EscapeDataString(new Vault(path).ThoughtPath(title)));
+            },
+            Message: message), DepKey.Empty);
+
         BoxEl Card(Thought t) => new()
         {
             Key = "card-" + t.Title,
@@ -217,12 +244,21 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
             Enter = new EnterExit(Sx: 0.96f, Sy: 0.96f, Opacity: 0f, Active: true),
             Transition = MotionTok.StandardEnter,
             Cursor = CursorId.Hand,
+            Role = AutomationRole.Button,
+            Focusable = true,
+            OnClick = () => selected.Value = t.Title,
+            OnKeyDown = e =>
+            {
+                if (e.KeyCode is 13 or 32) { selected.Value = t.Title; e.Handled = true; }
+            },
             Direction = 0,
             Gap = Spacing.XS,
             AlignItems = FlexAlign.Start,
             Padding = new Edges4(Spacing.M, Spacing.S, Spacing.XS, Spacing.S),
             Fill = Tok.FillCardDefault,
-            BorderColor = Tok.StrokeCardDefault,
+            HoverFill = Tok.FillCardSecondary,
+            PressedFill = Tok.FillCardSecondary,
+            BorderColor = selected.Value == t.Title ? Tok.AccentDefault : Tok.StrokeCardDefault,
             BorderWidth = 1f,
             Corners = Radii.CardAll,
             Children =
@@ -390,7 +426,7 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
         foreach (var name in rowNames)
             chips.Add(Chip(name, filter.Value == name, () => filter.Value = name));
 
-        return new BoxEl
+        var board = new BoxEl
         {
             Key = "board",
             Direction = 1,
@@ -480,6 +516,29 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                 ])),
             ],
         };
+
+        var open = selected.Value is { } title ? all.FirstOrDefault(t => t.Title == title) : null;
+        var layers = new List<Element> { board };
+        // Over the Board, not beside it, so opening a Thought moves nothing.
+        if (open is not null)
+            layers.Add(new BoxEl
+            {
+                Key = "panel",
+                OnRealized = h => panelBox.Value = h,
+                Direction = 1,
+                Width = PanelWidth,
+                JustifySelf = FlexAlign.End,
+                AlignSelf = FlexAlign.Stretch,
+                Margin = Edges4.All(Spacing.M),
+                Fill = Tok.FillSolidTertiary,
+                Corners = Radii.OverlayAll,
+                Shadow = Elevation.Dialog,
+                Enter = new EnterExit(Dx: PanelSlide, Opacity: 0f, Active: true),
+                Exit = new EnterExit(Dx: PanelSlide, Opacity: 0f, Active: true),
+                Transition = MotionTok.PaneOpen,
+                Children = [Embed.Comp(open, () => new ThoughtPanel(panelActions))],
+            });
+        return new BoxEl { Key = "board-stack", ZStack = true, Grow = 1f, Children = layers.ToArray() };
     }
 
     static string ColumnCount(Status status, List<Thought> all, string? filter)
