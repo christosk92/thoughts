@@ -94,7 +94,7 @@ One place on my PC to drop any thought in a few seconds, knowing it's safe. The 
 52. As the owner, I want a warning at 80% and AI paused at 100%, with capture still working, so that spending can't run away.
 53. As the owner, I want models configurable per step, so that I can change them when I learn more.
 54. As the owner, I want to use an API key by default, kept out of the vault and repo, so that my notes aren't used for training without my permission.
-55. As the owner, I want Claude Code as an optional backend, so that I can use my subscription when I choose.
+55. As the owner, I want a Caller such as Claude Code to add Thoughts and do the reasoning through MCP, so that I can use my subscription and run with no API key.
 56. As the owner, I want a check on my real notes after a few dozen Thoughts, so that I know whether Connections are insight or plausible sentences.
 
 ## Implementation Decisions
@@ -104,7 +104,7 @@ Modules, kept deep and small, with the app's UI depending only on their interfac
 - **Vault:** reads, watches and writes notes in Obsidian's own property style. Owns the note formats in the design, canonical writing and re-reading after a write, link rewriting for its own renames, broken-link detection, file-name rules, and the setup of `alwaysUpdateLinks` and graph settings for the vault.
 - **Board state:** the signals the UI reads. Owns Status rules, the Doing limit, Review selection and "2 of 3 done".
 - **Organizer:** the fixed chain from the design, with no tools given to the model. Owns candidates, prompts, schemas, validation including tolerant quote checks, Keep-local stops, retries and the `.thoughts/` store.
-- **Model backend:** one interface with two implementations, API key and `claude -p`. Takes a prompt and a schema, and returns structured output plus usage.
+- **Model backend:** one interface, implemented by the API key. Callers reach the same prompts and validation through `thoughts-mcp` (`docs/design.md`). Takes a prompt and a schema, and returns structured output plus usage.
 - **Embeddings:** `multilingual-e5-small` locally through ONNX Runtime, NPU when present and CPU otherwise. Logs ranks in shadow up to 300 notes, and picks the 300 above that.
 - **Usage:** records every call without note text, enforces the Budget, and feeds the Usage page.
 - **Screens:** Board (prototype layout B), capture strip, panel, Map, Review, Usage, Settings, on FluentGpu. The prototype is on the local branch `prototype/board` and is to be rewritten, not promoted.
@@ -125,4 +125,4 @@ Phone capture, share or send, notifications, importing from Teams or chats, cust
 
 ## Further Notes
 
-To verify while building: whether Obsidian ignores `.thoughts/`, whether Claude Code's lockdown flags work, and the Qualcomm licence before any shipping. Before Claude Code is used on real notes, the owner turns off the model-improvement setting. Real-AI checks need an API key, which the owner sets through `dotnet user-secrets` and never pastes in chat.
+To verify while building: whether Obsidian ignores `.thoughts/`, and the Qualcomm licence before any shipping. Real-AI checks need an API key, which the owner sets through `dotnet user-secrets` and never pastes in chat.

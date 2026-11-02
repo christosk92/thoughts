@@ -72,6 +72,10 @@ _Avoid_: Triage, reminder, standup
 The Obsidian folder that holds every Thought and Project.
 _Avoid_: Database, store
 
+**Caller**:
+A Claude Code session or other MCP client that adds Thoughts and does the AI's reasoning on its own model.
+_Avoid_: Client, agent, backend
+
 **Keep-local Thought**:
-A Thought that is never sent to the AI.
+A Thought that is never sent to the AI. One added by a Caller has been seen once by that Caller's model, and is never sent again.
 _Avoid_: Private note, offline thought

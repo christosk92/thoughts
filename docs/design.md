@@ -111,9 +111,34 @@ A fixed chain, not an agent, with no tools given to the model ([research](resear
 ## Backends and cost
 
 - **API key** is the default. In development it comes from `dotnet user-secrets`; in the app, from Windows Credential Manager, set in settings.
-- **Claude Code** (`claude -p`) is optional, for personal use, behind the same interface. Before use on real notes: prove the lockdown flags keep local configuration out, and turn off the model-improvement setting. It isn't offered to other users, because third-party products may not offer claude.ai login without approval.
+- **Callers** can do the reasoning instead, on their own model, through `thoughts-mcp` (below). This replaced the planned `claude -p` backend, so the app never launches Claude Code or handles its login.
 - **Budget:** a monthly amount. Warn at 80%. At 100% AI work pauses, and capture, Board and Review keep working.
 - Cost isn't a limit for now. The research estimated about $0.035 per Thought on Haiku and Sonnet, which roughly doubles with Opus, plus up to $0.037 for reading cards. None of this is measured.
+
+## thoughts-mcp
+
+A Caller is a Claude Code session or other MCP client. It adds Thoughts and does the reasoning on its own model, so no API key is needed.
+
+- **Process:** `thoughts-mcp.exe`, a separate stdio server pointed at a Vault. It works with the app closed and opens no port. The app sees its changes through the file watcher.
+- **Who reasons:**
+  - A Thought added through MCP never goes to the API by itself. While it waits, its card says so, and its menu offers "Organize with API key".
+  - A Thought typed in the app goes to the app's AI first. Callers can pull it only when there is no key or the Budget is used up.
+- **What starts it:** nothing wakes a Caller. The server offers an "organize waiting Thoughts" prompt, and the app shows how many are waiting. The person runs it or schedules it.
+- **Tools:** `add_thought`, list and claim waiting work, submit a result, confirm a new Project, and read-only search over Thought text and cards. There are no Status changes, and no rewriting of the person's words.
+- **Steps:** Organize and Connect, in that order. Pulling work returns the same instructions and JSON schema the app uses, and the same code checks every result, so New Projects need confirmation and Connections stay Suggested.
+- **New Projects:** a Caller can suggest one. The Thought stays in Unsorted with the suggestion saved. The person confirms in the app, or in the Caller's chat, where the Caller confirms through a tool on their say-so.
+- **Access:**
+
+| Action | Needs the Settings switch? |
+|---|---|
+| Add a Thought | No |
+| Organize a Thought the Caller just added | No. It gets Project and People names |
+| Pull other Thoughts, run Connect, search | Yes. Off by default, per Vault |
+
+- **Keep-local:** never returned by pulls, search or context. A Caller can add a Keep-local Thought with a flag, and the tool says its model has already seen that text once.
+- **Note text is data:** it comes back clearly delimited, and the docs suggest a session with few tools. This reduces prompt injection but can't remove it, because a Caller can have real tools such as shell and files.
+- **Usage page:** Caller work is listed with the step, client name and self-reported model. It costs nothing against the Budget and continues at 100%.
+- **Claims:** a claimed Thought goes back in line after 10 minutes with no result, so a dead session can't hold it.
 
 ## Proving it
 
@@ -127,6 +152,8 @@ After a few dozen real Thoughts, run a blind manual check using a plain script: 
 ## Open
 
 Left to the builder or to verify:
-- Whether Claude Code's lockdown flags work.
+- Whether the official C# MCP SDK works under NativeAOT. If not, stdio JSON-RPC can be written by hand, as the API backend was.
+- How the app and `thoughts-mcp` share `.thoughts/`, because the queue file was written for one process.
+- How a Caller does the Check step, which needs a fresh call that the server can't force on a Caller's session.
 - The Qualcomm licence, before the app is shipped to anyone.
 - The FluentGpu Markdown control's second pass, on engine branch `feat/markdown`, not pushed. The app needs that branch and PR #62 merged, or built against them.
