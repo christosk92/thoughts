@@ -14,7 +14,12 @@ sealed record PanelActions(
     Action<string, string> SaveBody,
     Action<string> FollowLink,
     Action<string> OpenInObsidian,
+    Func<string, Task<FanOutAnswer>> SuggestPieces,
+    Action<Thought, IReadOnlyList<string>> CreatePieces,
+    Func<string, (int Done, int Total)> PieceCount,
     IReadSignal<string?> Message);
+
+sealed record TickedPiece(FanOutPiece Piece, Signal<bool> Ticked);
 
 /// <summary>One Thought: its Status, and its body as preview or Markdown source. The source is the one truth.</summary>
 sealed class ThoughtPanel(PanelActions actions) : Component
@@ -24,6 +29,7 @@ sealed class ThoughtPanel(PanelActions actions) : Component
     const float StepHeight = 34f;
     const int SaveDelayMs = 400;
     const int EscapeKey = 27;
+    const float CheckBoxTextOffset = 6f; // Lines a 20 px text row up with the middle of the 32 px CheckBox.
     static readonly Status[] Steps = [Status.Inbox, Status.Parked, Status.Next, Status.Doing, Status.Done];
 
     public override Element Render()
@@ -35,6 +41,45 @@ sealed class ThoughtPanel(PanelActions actions) : Component
         var title = UseRef(t.Title);
         var post = UsePost();
         var overlay = UseContext(Overlay.Service);
+        var fanning = UseSignal(false);
+        var fanLoading = UseSignal(false);
+        var fanNote = UseSignal<string?>(null);
+        var fanPieces = UseSignal<IReadOnlyList<TickedPiece>>([]);
+
+        void ShowPieces(IEnumerable<FanOutPiece> pieces, string? note)
+        {
+            fanPieces.Value = pieces.Select(p => new TickedPiece(p, new Signal<bool>(false))).ToList();
+            fanNote.Value = note;
+            fanLoading.Value = false;
+        }
+
+        void StartFanOut()
+        {
+            Save();
+            string asked = title.Value;
+            fanning.Value = true;
+            fanLoading.Value = true;
+            ShowPieces([], null);
+            fanLoading.Value = true;
+            _ = actions.SuggestPieces(asked).ContinueWith(answer => post(() =>
+            {
+                if (title.Value != asked || !fanning.Peek()) return;
+                if (answer.IsCompletedSuccessfully) ShowPieces(answer.Result.Pieces, answer.Result.Note);
+                else ShowPieces([], "The AI hit a problem. Nothing changed.");
+            }));
+        }
+
+        void CreateTicked(Thought from)
+        {
+            var ticked = fanPieces.Peek().Where(p => p.Ticked.Peek()).Select(p => p.Piece.Text).ToList();
+            if (ticked.Count == 0)
+            {
+                fanNote.Value = "Tick at least one piece first.";
+                return;
+            }
+            actions.CreatePieces(from, ticked);
+            fanning.Value = false;
+        }
 
         void Save()
         {
@@ -60,6 +105,7 @@ sealed class ThoughtPanel(PanelActions actions) : Component
                 title.Value = t.Title;
                 body.Value = t.Body;
                 editing.Value = false;
+                fanning.Value = false;
             }
             else if (!unsaved.Value && t.Body != body.Peek().Trim())
             {
@@ -122,6 +168,41 @@ sealed class ThoughtPanel(PanelActions actions) : Component
             Children = [new TextEl(s.ToString()) { Size = 14f, Weight = (ushort)(on ? 600 : 400), Color = on ? Tok.OnAccent : Tok.TextPrimary }],
         };
 
+        Element FanOutSection() => VStack(Spacing.M,
+        [
+            BodyStrong("Fan out"),
+            Body("Tick what becomes its own Thought. This note stays as it is."),
+            .. fanLoading.Value
+                ? new Element[] { HStack(Spacing.S, ProgressRing.Indeterminate(ProgressRing.MinSize), Caption("Finding the pieces\u2026")) }
+                : [],
+            .. fanNote.Value is { } note ? new Element[] { Caption(note) with { Color = Tok.TextSecondary, Wrap = TextWrap.Wrap } } : [],
+            .. fanPieces.Value.Select((p, i) => (Element)new BoxEl
+            {
+                Key = "piece-" + i,
+                Direction = 0,
+                Gap = Spacing.XS,
+                AlignItems = FlexAlign.Start,
+                Children =
+                [
+                    CheckBox.Create("", p.Ticked, style: CheckBox.FluentStyle() with { MinWidth = 0f }), // Its 120 minimum is for a label beside the box.
+                    VStack(Spacing.XXS,
+                    [
+                        Body(p.Piece.Text) with { Wrap = TextWrap.Wrap, Shrink = 1f, MinWidth = 0f },
+                        .. p.Piece.Why is { Length: > 0 } why ? new Element[] { Caption(why) with { Color = Tok.TextSecondary, Wrap = TextWrap.Wrap } } : [],
+                    ]) with { Grow = 1f, Shrink = 1f, MinWidth = 0f, Margin = new Edges4(0f, CheckBoxTextOffset, 0f, 0f) },
+                ],
+            }),
+            HStack(Spacing.S,
+            [
+                .. fanPieces.Value.Count > 0 ? new Element[] { Button.Accent("Create Thoughts", () => CreateTicked(t)) } : [],
+                .. !fanLoading.Value && FanOut.Lines(body.Peek()).Count >= 2 && (fanPieces.Value.Count == 0 || fanPieces.Value.Any(p => p.Piece.Why is not null))
+                    ? new Element[] { Button.Standard("Pick lines", () => ShowPieces(FanOut.Lines(body.Peek()).Select(l => new FanOutPiece(l, null)), null)) }
+                    : [],
+                Button.Subtle("Cancel", () => fanning.Value = false),
+            ]),
+        ]);
+
+        var (piecesDone, piecesTotal) = actions.PieceCount(t.Title);
         var tint = ProjectTint(t.Project);
         return new BoxEl
         {
@@ -165,6 +246,7 @@ sealed class ThoughtPanel(PanelActions actions) : Component
                         Fill = Tok.FillCardDefault,
                         Children = Steps.Select(s => Step(s, t.Status == s, () => actions.SetStatus(t, s))).ToArray(),
                     },
+                    piecesTotal > 0 ? Caption($"{piecesDone} of {piecesTotal} done") with { Color = Tok.TextSecondary } : new BoxEl { Visible = false },
                     new BoxEl
                     {
                         Direction = 0,
@@ -172,6 +254,7 @@ sealed class ThoughtPanel(PanelActions actions) : Component
                         Children =
                         [
                             new BoxEl { Grow = 1f, Children = [BodyStrong("Notes")] },
+                            Button.Subtle("Fan out", StartFanOut),
                             Button.Subtle(editing.Value ? "Preview" : "Edit source", () =>
                             {
                                 Save();
@@ -180,6 +263,7 @@ sealed class ThoughtPanel(PanelActions actions) : Component
                         ],
                     },
                     // Both stay mounted, so switching keeps the caret and undo history, and moves nothing else.
+                    fanning.Value ? new BoxEl { Key = "fan-out", Children = [FanOutSection()] } : new BoxEl { Key = "no-fan-out", Visible = false },
                     new BoxEl
                     {
                         Key = "source",

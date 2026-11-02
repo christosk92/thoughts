@@ -81,6 +81,36 @@ sealed class Organizer(Vault vault, Func<IModelBackend?> backend, Action<Organiz
         lock (_lock) _failed.Add(title);
     }
 
+    /// <summary>Asks the AI how a Thought's body could be split. The person started this, and it writes nothing.</summary>
+    public async Task<FanOutAnswer> SuggestPieces(string title)
+    {
+        var note = vault.ReadThoughts().FirstOrDefault(t => t.Title == title);
+        if (note is null) return new FanOutAnswer([], "That note no longer exists.");
+        var lines = FanOut.Lines(note.Body).Select(l => new FanOutPiece(l, null)).ToList();
+        if (note.KeepLocal) return new FanOutAnswer(lines, "Keep-local Thoughts don't go to the AI, so pick the lines yourself.");
+        var segments = FanOut.Segments(note.Body);
+        if (segments.Count < 2) return new FanOutAnswer([], "This note is one piece, so there's nothing to split.");
+        if (usage.SpentThisMonth() >= budget()) return new FanOutAnswer(lines, "AI is paused by the Budget, so pick the lines yourself.");
+        if (backend() is not { } model) return new FanOutAnswer(lines, "AI is off, so pick the lines yourself.");
+        try
+        {
+            var request = new ModelRequest(Model, FanOut.SystemPrompt, FanOut.UserTurn(segments), FanOut.Schema, FanOut.MaxTokens);
+            var reply = await model.Complete(request, _stop.Token);
+            usage.Record("Fan out", request, reply);
+            if (reply.Json is null) return new FanOutAnswer(lines, (reply.Declined ?? "The AI gave no answer.") + " Pick the lines yourself.");
+            var pieces = FanOut.Read(reply.Json, segments);
+            return pieces.Count > 0 ? new FanOutAnswer(pieces, null) : new FanOutAnswer([], "The AI reads this as one piece of work. You can still pick lines yourself.");
+        }
+        catch (ModelException e)
+        {
+            return new FanOutAnswer(lines, e.Message + " Nothing changed. Pick the lines yourself, or try again.");
+        }
+        catch (Exception e) when (e is JsonException or KeyNotFoundException or InvalidOperationException or FormatException)
+        {
+            return new FanOutAnswer(lines, "The AI's answer couldn't be read. Nothing changed. Pick the lines yourself, or try again.");
+        }
+    }
+
     /// <summary>Writes a new card for a Thought whose body grew, and touches nothing else about it.</summary>
     public void EnqueueRefresh(string title) => Enqueue(RefreshPrefix + title);
 

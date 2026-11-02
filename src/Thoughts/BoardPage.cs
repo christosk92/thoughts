@@ -205,7 +205,7 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                     if (selected.Peek() == outcome.Was) selected.Value = outcome.Title;
                     bool worthShowing = outcome.FiledIn is not null || outcome.Person is not null
                         || outcome.SuggestedProject is not null || outcome.NewProject is not null || outcome.Relation is not null;
-                    if (lastCaptured.Value is not null && worthShowing)
+                    if (outcome.Was == lastCaptured.Value && worthShowing)
                     {
                         strip.Value = outcome;
                         stripOpen.Value = true;
@@ -351,6 +351,22 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                 var linked = thoughts.Peek().FirstOrDefault(x => string.Equals(x.Title, target, StringComparison.OrdinalIgnoreCase));
                 if (linked is not null) selected.Value = linked.Title;
                 else message.Value = $"{target} isn't a Thought. Open it in Obsidian.";
+            },
+            SuggestPieces: title => organizer.Value?.SuggestPieces(title)
+                ?? Task.FromResult(new FanOutAnswer([], "The vault isn't open.")),
+            CreatePieces: (parent, pieces) =>
+            {
+                var created = new List<string>();
+                Change(v =>
+                {
+                    foreach (string piece in pieces) created.Add(v.CreatePiece(parent, piece));
+                }, $"Created {pieces.Count} in Parked");
+                if (!parent.KeepLocal) foreach (string name in created) organizer.Value?.Enqueue(name);
+            },
+            PieceCount: title =>
+            {
+                var pieces = thoughts.Value.Where(x => x.CameFrom(title) && x.Status != Status.Dropped).ToList();
+                return (pieces.Count(x => x.Status == Status.Done), pieces.Count);
             },
             OpenInObsidian: title =>
             {

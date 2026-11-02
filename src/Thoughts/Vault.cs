@@ -11,7 +11,11 @@ enum Status { Inbox, Parked, Next, Doing, Done, Dropped }
 /// <summary>What Build on changed, enough to put it all back.</summary>
 sealed record BuildOnUndo(string Source, string SourceNote, string? SourceCard, string Target, string Added, string? TargetCard);
 
-sealed record Thought(string Title, Status Status, string? Project, string Body, string Created = "", bool KeepLocal = false, bool Organized = false);
+sealed record Thought(string Title, Status Status, string? Project, string Body, string Created = "", bool KeepLocal = false, bool Organized = false, string From = "")
+{
+    /// <summary>The Thoughts this one came from. Held as one string so that records still compare by value.</summary>
+    public bool CameFrom(string title) => From.Split('\n').Contains(title, StringComparer.OrdinalIgnoreCase);
+}
 
 sealed record BrokenLink(string Note, string Target);
 
@@ -63,7 +67,12 @@ sealed partial class Vault(string root)
 
     /// <summary>Saves a new Thought and returns only once it's safely on disk. Never refuses over a name, because
     /// losing a thought is worse: a taken name gets a number.</summary>
-    public string Capture(string text, bool keepLocal = false)
+    public string Capture(string text, bool keepLocal = false) => Create(text, keepLocal, Status.Inbox, null, null);
+
+    /// <summary>A piece of a fanned-out Thought: its own Thought in Parked, with the Project and Keep-local of the one it came from.</summary>
+    public string CreatePiece(Thought parent, string text) => Create(text, parent.KeepLocal, Status.Parked, parent.Project, parent.Title);
+
+    string Create(string text, bool keepLocal, Status status, string? project, string? from)
     {
         text = text.Trim();
         Directory.CreateDirectory(ThoughtsDir);
@@ -74,7 +83,9 @@ sealed partial class Vault(string root)
 
         var note = new StringBuilder()
             .Append("---\n")
-            .Append("status: ").Append(nameof(Status.Inbox)).Append('\n')
+            .Append("status: ").Append(status.ToString()).Append('\n')
+            .Append(project is null ? "" : $"project: {LinkTo(project)}\n")
+            .Append(from is null ? "" : $"from:\n  - {LinkTo(from)}\n")
             .Append(keepLocal ? "keep_local: true\n" : "")
             .Append("captured: ").Append(Quote(text)).Append('\n')
             .Append("created: ").Append(DateTime.Now.ToString("yyyy-MM-ddTHH:mm")).Append('\n')
@@ -88,7 +99,7 @@ sealed partial class Vault(string root)
     /// <summary>The name a Thought gets from its first line, before anyone gives it a better one.</summary>
     public string CapturedName(string text)
     {
-        string title = CleanName(text.Trim().Split('\n')[0]);
+        string title = CleanName(ListMarker().Replace(text.Trim().Split('\n')[0], ""));
         return title.Length > 0 ? title : "Thought";
     }
 
@@ -378,8 +389,10 @@ sealed partial class Vault(string root)
         string? project = null;
         string created = "";
         bool keepLocal = false;
+        string from = "";
         if (TryParseProperties(properties) is { } map)
         {
+            from = FromLinks(map);
             if (Scalar(map, "status") is { } value && Enum.TryParse<Status>(value, ignoreCase: true, out var parsed))
                 status = parsed;
             project = LinkTarget(Scalar(map, "project"));
@@ -391,7 +404,7 @@ sealed partial class Vault(string root)
         {
             keepLocal = true;
         }
-        return new Thought(title, status, project, body.Trim(), created, keepLocal);
+        return new Thought(title, status, project, body.Trim(), created, keepLocal, false, from);
     }
 
     // Obsidian or a sync tool may be writing the same file, so share it, and wait out a moment's lock.
@@ -430,6 +443,16 @@ sealed partial class Vault(string root)
         {
             return null;
         }
+    }
+
+    [GeneratedRegex(@"^\s*(#{1,6}\s+|[-*+]\s+(\[[ xX]\]\s+)?|\d+[.)]\s+|>\s+)")]
+    private static partial Regex ListMarker();
+
+    static string FromLinks(YamlMappingNode map)
+    {
+        if (!map.Children.TryGetValue(new YamlScalarNode("from"), out var node)) return "";
+        var values = node is YamlSequenceNode list ? list.Children.OfType<YamlScalarNode>().Select(n => n.Value) : [(node as YamlScalarNode)?.Value];
+        return string.Join('\n', values.Select(LinkTarget).Where(v => v is not null));
     }
 
     static string? Scalar(YamlMappingNode map, string key) =>
