@@ -1,4 +1,5 @@
 # Thoughts
+_What if your brain was a kanban board?_
 
 Drop in any thought, circle back on it, and work on it. A Windows desktop app on [FluentGpu](https://github.com/christosk92/fluent-gpu), over an Obsidian vault: every Thought is a plain Markdown note that stays readable without the app.
 
