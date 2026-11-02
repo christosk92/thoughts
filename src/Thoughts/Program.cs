@@ -27,9 +27,9 @@ static class Program
         LocalIndex.ForceCpu = Array.IndexOf(args, "--embeddings-cpu") >= 0;
 #endif
 
-        Tok.Use(Arg("--theme") == "light" ? ThemeKind.Light : ThemeKind.Dark);
+        AppTheme.Apply(Arg("--theme") switch { "light" => "Light", "dark" => "Dark", _ => settings.Theme });
 
-        var options = new AppOptions { Title = "Thoughts", Width = 1360, Height = 860 };
+        var options = new AppOptions { Title = "Thoughts", Width = 1360, Height = 860, MinWidth = 1040, MinHeight = 560, CustomFrame = true };
         Component Root() => new AppRoot(settings, settingsFile, canSave: Arg("--vault") is null, driveScript: Arg("--drive"));
         if (Arg("--screenshot") is { } shot)
             FluentAppHarness.Run(Root, options, new HarnessOptions

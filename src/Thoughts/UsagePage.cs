@@ -36,14 +36,12 @@ static class UsagePage
             Key = "usage",
             Direction = 1,
             Grow = 1f,
-            Padding = Edges4.All(Spacing.XXL),
-            Fill = Tok.FillSolidBase,
+            Padding = new Edges4(Spacing.XXL, Spacing.S, Spacing.XXL, Spacing.XXL),
             Children =
             [
+                AppTheme.PageHeader("Usage", back),
                 ScrollView(VStack(Spacing.L,
                 [
-                    Title("Usage"),
-                    HStack(Spacing.S, Button.Standard("Back", back)),
                     BodyStrong($"{Money(spent)} of {Money(budget.Peek())} used in {month}"),
                     ProgressBar.Determinate((float)Math.Min(ratio, 1), PageWidth,
                         ratio >= 1 ? ProgressBarState.Error : ratio >= UsageLog.WarnAt ? ProgressBarState.Paused : ProgressBarState.Normal),

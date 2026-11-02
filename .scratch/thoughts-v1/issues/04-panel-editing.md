@@ -18,6 +18,6 @@
 
 Verified 2026-11-02 on a throwaway vault through the debug --drive input: opening with no Board movement, task toggles, Status with the Doing limit, typing with autosave, closing with unsaved text, an outside edit appearing, [[links]] between Thoughts, a missing link's message, the link warning dialog, Escape, and keyboard opening. Dark and light looked at. `captured` and other properties stayed unchanged.
 
-The owner has asked for a WYSIWYG editor, being designed separately; this ticket remains source + preview.
+The owner asked for a WYSIWYG editor, designed separately. Since 2026-11-02 the panel uses it in place of source + preview: click and type, with a format bar and a larger dialog.
 
 Not driven: Open in Obsidian, IME, pointer text selection in this panel (driven on the engine's own page).

@@ -12,6 +12,9 @@ sealed class AppSettings
     /// <summary>US dollars a month the AI may spend. Reaching it pauses AI work, never capture.</summary>
     public double BudgetUsd { get; set; } = 20;
 
+    /// <summary>Light or Dark. Null follows Windows.</summary>
+    public string? Theme { get; set; }
+
     /// <summary>Fine suggests only Connections. Coarse also suggests plain related links with no sentence.</summary>
     public bool Coarse { get; set; }
 

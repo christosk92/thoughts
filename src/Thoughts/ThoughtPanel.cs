@@ -19,6 +19,7 @@ sealed record PanelActions(
     Func<string, (int Done, int Total)> PieceCount,
     Func<string, IReadOnlyList<Connection>> ConnectionsOf,
     Action<string> OpenMap,
+    Func<string, IReadOnlyList<string>> FindNotes,
     Func<string, PendingSuggestion?> SuggestionOf,
     SuggestionActions Suggestions,
     ConnectionActions Connections,
@@ -26,11 +27,11 @@ sealed record PanelActions(
 
 sealed record TickedPiece(FanOutPiece Piece, Signal<bool> Ticked);
 
-/// <summary>One Thought: its Status, and its body as preview or Markdown source. The source is the one truth.</summary>
+/// <summary>One Thought: its Status, what's suggested, and its body, which you click and type in. The file stays the one truth.</summary>
 sealed class ThoughtPanel(PanelActions actions) : Component
 {
-    const float EditorWidth = 412f; // The sheet's width less its padding, and TextBox has no fill mode.
-    const float EditorHeight = 420f;
+    const float TopMaxHeight = 340f; // The note keeps the rest, however much is suggested above it.
+    const float EditorBarMinWidth = 480f; // What the editor's whole format bar needs, which the panel leaves it.
     const float StepHeight = 34f;
     const int SaveDelayMs = 400;
     const int EscapeKey = 27;
@@ -41,11 +42,11 @@ sealed class ThoughtPanel(PanelActions actions) : Component
     {
         var t = UseProps<Thought>();
         var body = UseSignal(t.Body);
-        var editing = UseSignal(false);
         var unsaved = UseRef(false);
         var title = UseRef(t.Title);
         var post = UsePost();
         var overlay = UseContext(Overlay.Service);
+        var expanded = UseRef<OverlayHandle?>(null);
         var fanning = UseSignal(false);
         var fanLoading = UseSignal(false);
         var fanNote = UseSignal<string?>(null);
@@ -98,6 +99,7 @@ sealed class ThoughtPanel(PanelActions actions) : Component
         UseEffect(() => () =>
         {
             pause.Dispose();
+            expanded.Value?.Close();
             Save();
         }, DepKey.Empty);
 
@@ -109,7 +111,6 @@ sealed class ThoughtPanel(PanelActions actions) : Component
                 Save();
                 title.Value = t.Title;
                 body.Value = t.Body;
-                editing.Value = false;
                 fanning.Value = false;
             }
             else if (!unsaved.Value && t.Body != body.Peek().Trim())
@@ -118,33 +119,39 @@ sealed class ThoughtPanel(PanelActions actions) : Component
             }
         }, DepKey.From(t.Title.GetHashCode(), t.Body.GetHashCode()));
 
-        void Typed(string text)
+        var options = UseMemo(() => new MarkdownEditorOptions
         {
-            unsaved.Value = true;
-            pause.Change(SaveDelayMs, Timeout.Infinite);
-        }
-
-        var options = UseMemo(() => new MarkdownOptions
-        {
-            InlineSyntaxes =
-            [
-                new MarkdownInlineSyntax("wikilink", "[[", "]]", inner =>
-                {
-                    var parts = inner.Split('|', 2);
-                    string shown = parts.Length > 1 ? parts[1] : parts[0];
-                    return new MarkdownLink([new MarkdownText(shown)], parts[0].Trim(), "", "wikilink");
-                }),
-            ],
-            OnLinkClicked = link =>
+            Placeholder = "Write here. Type / to insert, or [[ to link to another note.",
+            CommandBarMinWidth = EditorBarMinWidth,
+            OnEdit = (_, _, _) =>
             {
-                if (link.Syntax == "wikilink") actions.FollowLink(link.Url);
-                else MarkdownLinkPolicy.ConfirmAndOpen(overlay, link.Url);
-            },
-            OnTaskToggled = (index, on) =>
-            {
-                body.Value = MarkdownTasks.Toggle(body.Peek(), index, on);
                 unsaved.Value = true;
-                Save();
+                pause.Change(SaveDelayMs, Timeout.Infinite);
+            },
+            Completions =
+            [
+                new MarkdownCompletionSource("[[", "]]", query => actions.FindNotes(query).Select(name => new MarkdownCompletion(name, name)).ToList()),
+            ],
+            Markdown = new MarkdownOptions
+            {
+                InlineSyntaxes =
+                [
+                    new MarkdownInlineSyntax("wikilink", "[[", "]]", inner =>
+                    {
+                        var parts = inner.Split('|', 2);
+                        string shown = parts.Length > 1 ? parts[1] : parts[0];
+                        return new MarkdownLink([new MarkdownText(shown)], parts[0].Trim(), "", "wikilink");
+                    }),
+                ],
+                OnLinkClicked = link =>
+                {
+                    if (link.Syntax == "wikilink")
+                    {
+                        expanded.Value?.Close();
+                        actions.FollowLink(link.Url);
+                    }
+                    else MarkdownLinkPolicy.ConfirmAndOpen(overlay, link.Url);
+                },
             },
         }, DepKey.Empty);
 
@@ -243,7 +250,12 @@ sealed class ThoughtPanel(PanelActions actions) : Component
                         new TextEl(t.Title) { Size = 24f, LineHeight = 30f, Weight = 600, Wrap = TextWrap.Wrap },
                     ],
                 },
-                ScrollView(VStack(Spacing.XL,
+                new ScrollEl
+                {
+                    ContentSized = true,
+                    MaxHeight = TopMaxHeight,
+                    Shrink = 0f,
+                    Content = VStack(Spacing.XL,
                     new BoxEl
                     {
                         Direction = 0,
@@ -270,47 +282,32 @@ sealed class ThoughtPanel(PanelActions actions) : Component
                             ],
                         }
                         : new BoxEl { Key = "no-connections", Visible = false },
-                    new BoxEl
-                    {
-                        Direction = 0,
-                        AlignItems = FlexAlign.Center,
-                        Children =
-                        [
-                            new BoxEl { Grow = 1f, Children = [BodyStrong("Notes")] },
-                            Button.Subtle("Map", () => actions.OpenMap(t.Title)),
-                            Button.Subtle("Fan out", StartFanOut),
-                            Button.Subtle(editing.Value ? "Preview" : "Edit source", () =>
-                            {
-                                Save();
-                                editing.Value = !editing.Peek();
-                            }),
-                        ],
-                    },
-                    // Both stay mounted, so switching keeps the caret and undo history, and moves nothing else.
-                    fanning.Value ? new BoxEl { Key = "fan-out", Children = [FanOutSection()] } : new BoxEl { Key = "no-fan-out", Visible = false },
-                    new BoxEl
-                    {
-                        Key = "source",
-                        Visible = editing.Value,
-                        Children =
-                        [
-                            TextBox.Create(body, Typed, new TextBox.TextBoxOptions
-                            {
-                                AcceptsReturn = true,
-                                Width = EditorWidth,
-                                Height = EditorHeight,
-                                Placeholder = "Add detail here. Markdown works, and [[links]] reach other notes.",
-                                KeepTextOnEscape = true, // A person's words are never thrown away by a key.
-                                OnCancel = actions.Close,
-                            }),
-                        ],
-                    },
-                    new BoxEl
-                    {
-                        Key = "preview",
-                        Visible = !editing.Value,
-                        Children = [MarkdownTextBlock.Create(body, options)],
-                    }) with { Padding = new Edges4(Spacing.XXL, Spacing.XL, Spacing.XXL, Spacing.XL) }),
+                    fanning.Value ? new BoxEl { Key = "fan-out", Children = [FanOutSection()] } : new BoxEl { Key = "no-fan-out", Visible = false }) with { Padding = new Edges4(Spacing.XXL, Spacing.XL, Spacing.XXL, Spacing.M) },
+                },
+                new BoxEl
+                {
+                    Direction = 0,
+                    AlignItems = FlexAlign.Center,
+                    Padding = new Edges4(Spacing.XXL, 0f, Spacing.XXL, Spacing.XS),
+                    Children =
+                    [
+                        new BoxEl { Grow = 1f, Children = [BodyStrong("Notes")] },
+                        Button.Subtle("Map", () => actions.OpenMap(t.Title)),
+                        Button.Subtle("Fan out", StartFanOut),
+                        ToolTip.Wrap(IconButton.Create(Icons.FullScreen, () => expanded.Value = ExpandedNote.Open(overlay, t.Title, body, options, Save), size: ControlSize.Small), "Open in a larger window"),
+                    ],
+                },
+                // Keyed by Thought, so undo and the caret start fresh on another note.
+                new BoxEl
+                {
+                    Key = "editor-" + t.Title,
+                    Direction = 1,
+                    Grow = 1f,
+                    Shrink = 1f,
+                    MinHeight = 0f,
+                    Margin = new Edges4(Spacing.M, 0f, Spacing.M, 0f),
+                    Children = [MarkdownEditor.Create(body, options)],
+                },
                 Divider(),
                 new BoxEl
                 {

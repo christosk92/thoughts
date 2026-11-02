@@ -16,7 +16,8 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
     const string ThoughtDrag = "thought";
     const float DialogFieldWidth = 272f; // ContentDialog's narrowest width less its padding, and TextBox has no fill mode.
     const int ReloadDelayMs = 150;
-    const float PanelWidth = 460f;
+    const float PanelWidth = 520f;
+    const float CaptureWidth = 420f;
     const float PanelSlide = 32f;
     const float StripWidth = 620f;
     const float CardFooterHeight = 24f; // Reserved on every card, so what the AI adds never changes its height.
@@ -27,7 +28,20 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
     static readonly Status[] Columns = [Status.Inbox, Status.Parked, Status.Next, Status.Doing, Status.Done];
     static readonly Status[] AllStatuses = [.. Columns, Status.Dropped];
 
+    Element? titleBar;
+
     public override Element Render()
+    {
+        var page = Page();
+        return new BoxEl
+        {
+            Direction = 1,
+            Grow = 1f,
+            Children = [titleBar!, new BoxEl { Direction = 1, Grow = 1f, Shrink = 1f, MinHeight = 0f, Children = [page] }],
+        };
+    }
+
+    Element Page()
     {
         var vaultPath = UseSignal(settings.VaultPath);
         var showSettings = UseSignal(settings.VaultPath is null);
@@ -439,6 +453,7 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
             ConnectionsOf: title => connections.Value.Where(c => c.State != ConnectionState.Dismissed && c.Involves(title)).ToList(),
             Connections: connectionActions,
             OpenMap: title => mapFocus.Value = title,
+            FindNotes: query => thoughts.Peek().Select(x => x.Title).Where(x => x.Contains(query, StringComparison.OrdinalIgnoreCase)).Take(8).ToList(),
             SuggestionOf: title => suggestions.Value.FirstOrDefault(x => x.Title == title).Suggestion,
             Suggestions: suggestionActions,
             PieceCount: title =>
@@ -613,6 +628,94 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
             });
         }
 
+        double UsageRatio() => budget.Value > 0 ? usageCalls.Value.Sum(c => c.Cost) / budget.Value : 1;
+
+        // Built once, so what's typed and the focus survive: each piece reads the signals it shows.
+        bool OnBoard() => !showSettings.Value && !showUsage.Value && reviewing.Value is null && mapFocus.Value is null;
+        titleBar ??= TitleBar.Create(new TitleBarOptions
+        {
+            Title = "Thoughts",
+            ShowRailBaseline = false,
+            Lead = () =>
+            [
+                new TitleBarItem("capture", () => Live.Of(() => new BoxEl
+                {
+                    Direction = 0,
+                    Gap = Spacing.M,
+                    AlignItems = FlexAlign.Center,
+                    Visible = OnBoard(),
+                    Children =
+                    [
+                        // A popup anchored to capture, so suggestions arriving seconds later move nothing, and typing carries on.
+                        Popup.Create(new BoxEl
+                        {
+                            Key = "capture",
+                            OnRealized = h => captureBox.Value = h,
+                            Children =
+                            [
+                                TextBox.Create(capture, null, new TextBox.TextBoxOptions
+                                {
+                                    Placeholder = "Drop a thought here and press Enter",
+                                    Width = CaptureWidth,
+                                    OnCommit = Capture,
+                                }),
+                            ],
+                        }, () => new BoxEl { OnClick = static () => { }, Children = [StripContent()] }, stripOpen, null, FlyoutPlacement.BottomEdgeAlignedLeft,
+                            new PopupOptions(FocusTrap: false, DismissBehavior: DismissBehavior.None) { PreserveFocusOnOpen = true }),
+                        Button.Accent("Add", () => Capture(capture.Peek())),
+                        ToggleButton.Create("Keep local", keepLocal),
+                    ],
+                })),
+            ],
+            TrailingItems = () =>
+            [
+                new TitleBarItem("review", () => Live.Of(() =>
+                {
+                    int reviewCount = ReviewQueue.Select(thoughts.Value, DateTime.Today).Count;
+                    return new BoxEl
+                    {
+                        Visible = OnBoard(),
+                        Children =
+                        [
+                            Button.Standard(reviewCount > 0 ? $"Review {reviewCount}" : "Review", () =>
+                            {
+                                message.Value = null;
+                                reviewing.Value = ReviewQueue.Select(thoughts.Peek(), DateTime.Today);
+                                reviewAt.Value = 0;
+                            }),
+                        ],
+                    };
+                })),
+                new TitleBarItem("usage", () => Live.Of(() =>
+                {
+                    double ratio = UsageRatio();
+                    return new BoxEl
+                    {
+                        Visible = OnBoard(),
+                        Children = [Button.Standard(ratio >= 1 ? "Usage: Budget used up" : ratio >= UsageLog.WarnAt ? $"Usage: {ratio * 100:F0}%" : "Usage", () => showUsage.Value = true)],
+                    };
+                })),
+                new TitleBarItem("settings", () => Live.Of(() => new BoxEl
+                {
+                    Visible = OnBoard(),
+                    Children =
+                    [
+                        Button.Standard(health.Value.Issues switch
+                        {
+                            0 => "Settings",
+                            1 => "Settings: 1 vault problem",
+                            var n => $"Settings: {n} vault problems",
+                        }, () =>
+                        {
+                            pathField.Value = vaultPath.Peek() ?? AppSettings.SuggestedVaultPath;
+                            message.Value = null;
+                            showSettings.Value = true;
+                        }),
+                    ],
+                })),
+            ],
+        });
+
         if (showSettings.Value)
         {
             var projectRows = projects.Value.Select(p => (Element)new BoxEl
@@ -634,12 +737,25 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                 Key = "settings",
                 Direction = 1,
                 Grow = 1f,
-                Padding = Edges4.All(Spacing.XXL),
-                Fill = Tok.FillSolidBase,
+                Padding = new Edges4(Spacing.XXL, Spacing.S, Spacing.XXL, Spacing.XXL),
+                Focusable = true,
+                OnRealized = h => hooks.FocusNode?.Invoke(h, false), // So Escape works before anything on the page was clicked.
+                OnKeyDown = e =>
+                {
+                    if (e.KeyCode == 27 && vaultPath.Peek() is not null)
+                    {
+                        showSettings.Value = false;
+                        e.Handled = true;
+                    }
+                },
                 Children =
                 [
+                    AppTheme.PageHeader("Settings", vaultPath.Value is null ? null : () => showSettings.Value = false),
                     ScrollView(VStack(Spacing.L,
-                        Title("Settings"),
+                        Embed.Comp(() => new ThemeSection(settings, () =>
+                        {
+                            if (canSave) settings.Save(settingsFile);
+                        })),
                         Body("Where your Thoughts live. This folder is an Obsidian vault, and the notes stay readable without this app."),
                         TextBox.Create(pathField, null, new TextBox.TextBoxOptions
                         {
@@ -647,9 +763,7 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                             Width = 620f,
                             OnCommit = _ => UseVault(),
                         }),
-                        HStack(Spacing.S,
-                            Button.Accent("Use this vault", UseVault),
-                            vaultPath.Value is null ? new BoxEl() : Button.Standard("Back", () => showSettings.Value = false)),
+                        HStack(Spacing.S, Button.Accent("Use this vault", UseVault)),
                         vaultPath.Value is null ? new BoxEl() : VStack(Spacing.M,
                         [
                             Subtitle("Projects"),
@@ -779,11 +893,10 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
             };
         }
 
-        double usageRatio = budget.Value > 0 ? usageCalls.Value.Sum(c => c.Cost) / budget.Value : 1;
+        double usageRatio = UsageRatio();
         var all = thoughts.Value;
         int droppedCount = all.Count(t => t.Status == Status.Dropped);
         var rowNames = RowNames(projects.Value, all);
-        int reviewCount = ReviewQueue.Select(all, DateTime.Today).Count;
 
         BoxEl Cell(Element child, bool lead = false, DropTargetSpec? drop = null, string? dropId = null) => new()
         {
@@ -836,8 +949,7 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
             Direction = 1,
             Grow = 1f,
             Gap = Spacing.M,
-            Padding = new Edges4(Spacing.XL, Spacing.XL, Spacing.XL, 0f),
-            Fill = Tok.FillSolidBase,
+            Padding = new Edges4(Spacing.XL, Spacing.XS, Spacing.XL, 0f),
             Children =
             [
                 new BoxEl
@@ -847,54 +959,17 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                     AlignItems = FlexAlign.Center,
                     Children =
                     [
-                        // A popup anchored to capture, so suggestions arriving seconds later move nothing, and typing carries on.
-                        Popup.Create(new BoxEl
-                        {
-                            Key = "capture",
-                            OnRealized = h => captureBox.Value = h,
-                            Children =
-                            [
-                                TextBox.Create(capture, null, new TextBox.TextBoxOptions
-                                {
-                                    Placeholder = "Drop a thought here and press Enter",
-                                    Width = 620f,
-                                    OnCommit = Capture,
-                                }),
-                            ],
-                        }, () => new BoxEl { OnClick = static () => { }, Children = [StripContent()] }, stripOpen, null, FlyoutPlacement.BottomEdgeAlignedLeft,
-                            new PopupOptions(FocusTrap: false, DismissBehavior: DismissBehavior.None) { PreserveFocusOnOpen = true }),
-                        Button.Accent("Add", () => Capture(capture.Peek())),
-                        ToggleButton.Create("Keep local", keepLocal),
+                        new BoxEl { Direction = 0, Gap = Spacing.S, Wrap = true, Grow = 1f, Shrink = 1f, MinWidth = 0f, Children = chips.ToArray() },
                         // The slot is always there, so a message appearing moves nothing.
                         new BoxEl
                         {
                             Key = "message",
-                            Grow = 1f,
                             Shrink = 1f,
                             MinWidth = 0f,
                             Children = [new TextEl(string.Join(" · ", new[] { message.Value, aiStatus.Value, BudgetNote(usageRatio), queue.Value.ForCaller is { Count: > 0 } callerWork ? $"{callerWork.Count} waiting for a Caller" : null }.Where(s => s is not null))) { Size = 14f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, Shrink = 1f, MinWidth = 0f }],
                         },
-                        Button.Standard(reviewCount > 0 ? $"Review {reviewCount}" : "Review", () =>
-                        {
-                            message.Value = null;
-                            reviewing.Value = ReviewQueue.Select(thoughts.Peek(), DateTime.Today);
-                            reviewAt.Value = 0;
-                        }),
-                        Button.Standard(usageRatio >= 1 ? "Usage: Budget used up" : usageRatio >= UsageLog.WarnAt ? $"Usage: {usageRatio * 100:F0}%" : "Usage", () => showUsage.Value = true),
-                        Button.Standard(health.Value.Issues switch
-                        {
-                            0 => "Settings",
-                            1 => "Settings: 1 vault problem",
-                            var n => $"Settings: {n} vault problems",
-                        }, () =>
-                        {
-                            pathField.Value = vaultPath.Peek() ?? AppSettings.SuggestedVaultPath;
-                            message.Value = null;
-                            showSettings.Value = true;
-                        }),
                     ],
                 },
-                new BoxEl { Direction = 0, Gap = Spacing.S, Wrap = true, Children = chips.ToArray() },
                 new BoxEl
                 {
                     Direction = 0,

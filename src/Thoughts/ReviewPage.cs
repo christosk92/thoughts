@@ -69,8 +69,7 @@ sealed class ReviewPage : Component
             Key = "review",
             Direction = 1,
             Grow = 1f,
-            Padding = Edges4.All(Spacing.XXL),
-            Fill = Tok.FillSolidBase,
+            Padding = new Edges4(Spacing.XXL, Spacing.S, Spacing.XXL, Spacing.XXL),
             OnKeyDown = e =>
             {
                 if (e.KeyCode == EscapeKey) { p.Stop(); e.Handled = true; }
