@@ -17,6 +17,8 @@ sealed record PanelActions(
     Func<string, Task<FanOutAnswer>> SuggestPieces,
     Action<Thought, IReadOnlyList<string>> CreatePieces,
     Func<string, (int Done, int Total)> PieceCount,
+    Func<string, IReadOnlyList<Connection>> ConnectionsOf,
+    ConnectionActions Connections,
     IReadSignal<string?> Message);
 
 sealed record TickedPiece(FanOutPiece Piece, Signal<bool> Ticked);
@@ -203,6 +205,7 @@ sealed class ThoughtPanel(PanelActions actions) : Component
         ]);
 
         var (piecesDone, piecesTotal) = actions.PieceCount(t.Title);
+        var connections = actions.ConnectionsOf(t.Title);
         var tint = ProjectTint(t.Project);
         return new BoxEl
         {
@@ -247,6 +250,19 @@ sealed class ThoughtPanel(PanelActions actions) : Component
                         Children = Steps.Select(s => Step(s, t.Status == s, () => actions.SetStatus(t, s))).ToArray(),
                     },
                     piecesTotal > 0 ? Caption($"{piecesDone} of {piecesTotal} done") with { Color = Tok.TextSecondary } : new BoxEl { Visible = false },
+                    connections.Count > 0
+                        ? new BoxEl
+                        {
+                            Key = "connections",
+                            Direction = 1,
+                            Gap = Spacing.S,
+                            Children =
+                            [
+                                BodyStrong("Connections"),
+                                .. connections.Select(c => ConnectionView.Create(c, t.Title, actions.Connections)),
+                            ],
+                        }
+                        : new BoxEl { Key = "no-connections", Visible = false },
                     new BoxEl
                     {
                         Direction = 0,

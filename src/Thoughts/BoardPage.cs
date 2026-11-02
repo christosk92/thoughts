@@ -54,6 +54,7 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
         var keyState = UseSignal(ApiKey.Describe());
         var organizer = UseRef<Organizer?>(null);
         var queue = UseSignal(OrganizeQueue.Empty);
+        var connections = UseSignal(LoadConnections(settings.VaultPath));
         var showUsage = UseSignal(false);
         var usageCalls = UseSignal<IReadOnlyList<UsageCall>>([]);
         var budget = UseSignal(settings.BudgetUsd);
@@ -86,6 +87,8 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                 thoughts.Value = fresh;
                 dropped.Value = DroppedOf(fresh);
             }
+            var freshConnections = LoadConnections(vaultPath.Peek());
+            if (!freshConnections.SequenceEqual(connections.Peek())) connections.Value = freshConnections;
             var freshProjects = LoadProjects(vaultPath.Peek());
             if (!freshProjects.SequenceEqual(projects.Peek())) projects.Value = freshProjects;
             var freshHealth = LoadHealth(vaultPath.Peek());
@@ -172,6 +175,7 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
             stripOpen.Value = false;
             builtOn.Value = null;
             lastCaptured.Value = saved;
+            strip.Value = null;
             keepLocal.Value = false;
             if (!local) organizer.Value?.Enqueue(saved);
         }
@@ -205,17 +209,23 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                     if (selected.Peek() == outcome.Was) selected.Value = outcome.Title;
                     bool worthShowing = outcome.FiledIn is not null || outcome.Person is not null
                         || outcome.SuggestedProject is not null || outcome.NewProject is not null || outcome.Relation is not null;
-                    if (outcome.Was == lastCaptured.Value && worthShowing)
+                    if (outcome.Was == lastCaptured.Value)
                     {
+                        // Kept even with nothing to show yet, because Connections can arrive later for this Thought.
                         strip.Value = outcome;
-                        stripOpen.Value = true;
+                        stripOpen.Value = worthShowing;
                     }
                     lastCaptured.Value = outcome.Title == lastCaptured.Value ? null : lastCaptured.Value;
                 }),
                 text => post(() => aiStatus.Value = text),
                 state => post(() => queue.Value = state),
                 usage,
-                () => settings.BudgetUsd);
+                () => settings.BudgetUsd,
+                title => post(() =>
+                {
+                    Reload();
+                    if (strip.Peek()?.Title == title) stripOpen.Value = true;
+                }));
             organizer.Value = running;
             running.Start();
             return () =>
@@ -342,6 +352,27 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                 Move(t, status ?? t.Status, project ?? t.Project ?? Unsorted);
             });
 
+        var connectionActions = UseMemo(() => new ConnectionActions(
+            Accept: c => Change(v => v.AcceptConnection(c)),
+            Dismiss: c => Change(v => v.DismissConnection(c)),
+            BuildOn: c =>
+            {
+                string? made = null;
+                Change(v => made = v.BuildOnConnection(c), "Saved to Inbox");
+                if (made is null) return;
+                organizer.Value?.Enqueue(made);
+                selected.Value = made;
+                stripOpen.Value = false;
+            },
+            Open: title =>
+            {
+                if (thoughts.Peek().Any(x => string.Equals(x.Title, title, StringComparison.OrdinalIgnoreCase)))
+                {
+                    selected.Value = title;
+                    stripOpen.Value = false;
+                }
+                else message.Value = $"{title} no longer exists.";
+            }), DepKey.Empty);
         var panelActions = UseMemo(() => new PanelActions(
             Close: () => selected.Value = null,
             SetStatus: SetStatus,
@@ -363,6 +394,8 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                 }, $"Created {pieces.Count} in Parked");
                 if (!parent.KeepLocal) foreach (string name in created) organizer.Value?.Enqueue(name);
             },
+            ConnectionsOf: title => connections.Value.Where(c => c.State != ConnectionState.Dismissed && c.Involves(title)).ToList(),
+            Connections: connectionActions,
             PieceCount: title =>
             {
                 var pieces = thoughts.Value.Where(x => x.CameFrom(title) && x.Status != Status.Dropped).ToList();
@@ -394,6 +427,7 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
         Element CardFooter(Thought t)
         {
             var state = queue.Value;
+            int suggested = connections.Value.Count(c => c.State == ConnectionState.Suggested && c.Involves(t.Title));
             Element? line = null;
             if (t.KeepLocal) line = FooterLine("local", Icon(Icons.Lock, 12f), FooterText("Kept local"));
             else if (state.Current == t.Title) line = FooterLine("working", ProgressRing.Indeterminate(ProgressRing.MinSize), FooterText("Organizing\u2026"));
@@ -401,7 +435,7 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                 line = FooterLine("failed", Icon(Icons.Warning, 12f) with { Color = Tok.SystemFillCaution }, FooterText("Couldn't organize"),
                     HyperlinkButton.Create("Retry", () => organizer.Value?.Enqueue(t.Title)));
             else if (state.Waiting.Contains(t.Title)) line = FooterLine("waiting", Icon(Icons.Clock, 12f), FooterText("Waiting to organize"));
-            else if (t.Project is not null || t.Organized)
+            else if (t.Project is not null || t.Organized || suggested > 0 || state.Connecting == t.Title)
                 line = FooterLine("filed", [
                     .. t.Project is { } project ? new Element[] { new BoxEl
                     {
@@ -415,6 +449,8 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                         Children = [FooterText(project)],
                     } } : [],
                     .. t.Organized ? new Element[] { ToolTip.Wrap(Icon(SparkleGlyph, 12f), "Organized by AI") } : [],
+                    .. suggested > 0 ? new Element[] { ToolTip.Wrap(FooterText($"{suggested} to review"), "Suggested Connections") } : [],
+                    .. state.Connecting == t.Title ? new Element[] { ToolTip.Wrap(ProgressRing.Indeterminate(ProgressRing.MinSize), "Looking for Connections") } : [],
                 ]);
             return new BoxEl
             {
@@ -670,6 +706,7 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                     new TextEl(found.Title) { Size = 14f, Weight = 600, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, Shrink = 1f, MinWidth = 0f },
                     filedText.Length > 0 ? Caption(filedText) : new BoxEl { Visible = false },
                     found.Why is { Length: > 0 } why ? Body(why) : new BoxEl { Visible = false },
+                    .. connections.Value.Where(c => c.State == ConnectionState.Suggested && c.Involves(found.Title)).Select(c => ConnectionView.Create(c, found.Title, connectionActions)),
                     found.Relation is { } related
                         ? VStack(Spacing.XS,
                             BodyStrong(related.MoreDetail ? $"More detail on {related.Target}" : $"Grew from {related.Target}") with { MaxLines = 1, Trim = TextTrim.CharacterEllipsis, Shrink = 1f, MinWidth = 0f },
@@ -891,6 +928,7 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
 
     static VaultHealth LoadHealth(string? path) => path is null ? new VaultHealth([], []) : new Vault(path).CheckHealth();
     static List<Thought> LoadThoughts(string? path) => path is null ? [] : new Vault(path).ReadThoughts();
+    static List<Connection> LoadConnections(string? path) => path is null ? [] : new Vault(path).ReadConnections();
     static List<string> LoadProjects(string? path) => path is null ? [] : new Vault(path).ReadProjects();
     static List<Thought> DroppedOf(List<Thought> all) => all.Where(t => t.Status == Status.Dropped).ToList();
 

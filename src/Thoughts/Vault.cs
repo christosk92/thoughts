@@ -11,6 +11,16 @@ enum Status { Inbox, Parked, Next, Doing, Done, Dropped }
 /// <summary>What Build on changed, enough to put it all back.</summary>
 sealed record BuildOnUndo(string Source, string SourceNote, string? SourceCard, string Target, string Added, string? TargetCard);
 
+enum ConnectionState { Suggested, Accepted, Dismissed }
+
+/// <summary>A note in <c>Connections/</c>. The two Thoughts always come from <c>between</c>, never from the file name.</summary>
+sealed record Connection(string Name, string A, string B, ConnectionState State, string Kind, string Explanation)
+{
+    public bool Involves(string title) => string.Equals(A, title, StringComparison.OrdinalIgnoreCase) || string.Equals(B, title, StringComparison.OrdinalIgnoreCase);
+
+    public string OtherThan(string title) => string.Equals(A, title, StringComparison.OrdinalIgnoreCase) ? B : A;
+}
+
 sealed record Thought(string Title, Status Status, string? Project, string Body, string Created = "", bool KeepLocal = false, bool Organized = false, string From = "")
 {
     /// <summary>The Thoughts this one came from. Held as one string so that records still compare by value.</summary>
@@ -70,9 +80,9 @@ sealed partial class Vault(string root)
     public string Capture(string text, bool keepLocal = false) => Create(text, keepLocal, Status.Inbox, null, null);
 
     /// <summary>A piece of a fanned-out Thought: its own Thought in Parked, with the Project and Keep-local of the one it came from.</summary>
-    public string CreatePiece(Thought parent, string text) => Create(text, parent.KeepLocal, Status.Parked, parent.Project, parent.Title);
+    public string CreatePiece(Thought parent, string text) => Create(text, parent.KeepLocal, Status.Parked, parent.Project, [parent.Title]);
 
-    string Create(string text, bool keepLocal, Status status, string? project, string? from)
+    string Create(string text, bool keepLocal, Status status, string? project, IReadOnlyList<string>? from)
     {
         text = text.Trim();
         Directory.CreateDirectory(ThoughtsDir);
@@ -85,7 +95,7 @@ sealed partial class Vault(string root)
             .Append("---\n")
             .Append("status: ").Append(status.ToString()).Append('\n')
             .Append(project is null ? "" : $"project: {LinkTo(project)}\n")
-            .Append(from is null ? "" : $"from:\n  - {LinkTo(from)}\n")
+            .Append(from is null ? "" : "from:\n" + string.Concat(from.Select(f => $"  - {LinkTo(f)}\n")))
             .Append(keepLocal ? "keep_local: true\n" : "")
             .Append("captured: ").Append(Quote(text)).Append('\n')
             .Append("created: ").Append(DateTime.Now.ToString("yyyy-MM-ddTHH:mm")).Append('\n')
@@ -137,16 +147,79 @@ sealed partial class Vault(string root)
         string path = ThoughtPath(title);
         if (!File.Exists(ThoughtPath(target))) throw new VaultException($"{target} no longer exists.");
         if (!File.Exists(path)) throw new VaultException("That note no longer exists.");
+        AddToList(path, "from", target);
+    }
+
+    void AddToList(string path, string key, string target)
+    {
         var (properties, _) = SplitNote(ReadNote(path).Replace("\r\n", "\n"));
         var lines = properties.Split('\n');
-        int at = Array.FindIndex(lines, l => l.StartsWith("from:", StringComparison.Ordinal));
+        int at = Array.FindIndex(lines, l => l.StartsWith(key + ":", StringComparison.Ordinal));
         var items = new List<string>();
         for (int i = at + 1; at >= 0 && i < lines.Length && (lines[i].StartsWith(' ') || lines[i].StartsWith('-')); i++)
             items.Add(lines[i].TrimStart(' ', '-'));
         string link = LinkTo(target);
         if (items.Contains(link)) return;
         items.Add(link);
-        SetProperty(path, "from", string.Concat(items.Select(item => $"\n  - {item}")));
+        SetProperty(path, key, string.Concat(items.Select(item => $"\n  - {item}")));
+    }
+
+    string ConnectionsDir => Path.Combine(Root, "Connections");
+
+    string ConnectionPath(string name) => Path.Combine(ConnectionsDir, name + ".md");
+
+    public List<Connection> ReadConnections()
+    {
+        if (!Directory.Exists(ConnectionsDir)) return [];
+        var connections = new List<Connection>();
+        foreach (string path in Directory.EnumerateFiles(ConnectionsDir, "*.md").Order(StringComparer.Ordinal))
+        {
+            if (File.Exists(path) && ParseConnection(path) is { } connection) connections.Add(connection);
+        }
+        return connections;
+    }
+
+    static Connection? ParseConnection(string path)
+    {
+        var (properties, body) = SplitNote(ReadNote(path).Replace("\r\n", "\n"));
+        if (TryParseProperties(properties) is not { } map) return null;
+        if (!map.Children.TryGetValue(new YamlScalarNode("between"), out var node) || node is not YamlSequenceNode list) return null;
+        var ends = list.Children.OfType<YamlScalarNode>().Select(n => LinkTarget(n.Value)).Where(t => t is not null).ToList();
+        if (ends.Count != 2) return null;
+        var state = Enum.TryParse<ConnectionState>(Scalar(map, "state"), ignoreCase: true, out var parsed) ? parsed : ConnectionState.Suggested;
+        return new Connection(Path.GetFileNameWithoutExtension(path), ends[0]!, ends[1]!, state, Scalar(map, "kind") ?? "", body.Trim());
+    }
+
+    /// <summary>A name that means nothing on purpose: a Thought's rename mustn't leave it stale, and it can't collide with a Thought's name.</summary>
+    public string AddConnection(string a, string b, string kind, string explanation)
+    {
+        Directory.CreateDirectory(ConnectionsDir);
+        var taken = TakenNames();
+        string stamp = "Connection " + DateTime.Now.ToString("yyyyMMdd-HHmmss");
+        string name = stamp;
+        for (int n = 2; taken.Contains(name); n++) name = $"{stamp}-{n}";
+        string note = $"---\nbetween:\n  - {LinkTo(a)}\n  - {LinkTo(b)}\nstate: suggested\nkind: {kind}\n---\n{explanation.Trim()}\n";
+        WriteDurably(ConnectionPath(name), note);
+        return name;
+    }
+
+    public void AcceptConnection(Connection c)
+    {
+        SetProperty(ConnectionPath(c.Name), "state", "accepted");
+        if (File.Exists(ThoughtPath(c.A))) AddToList(ThoughtPath(c.A), "connected", c.B);
+        if (File.Exists(ThoughtPath(c.B))) AddToList(ThoughtPath(c.B), "connected", c.A);
+    }
+
+    /// <summary>The note stays, as the record that this pair was already answered.</summary>
+    public void DismissConnection(Connection c) => SetProperty(ConnectionPath(c.Name), "state", "dismissed");
+
+    /// <summary>A new Thought that starts from the claim and comes from both. This is the one body that starts as the AI's
+    /// words, because the person asked for it, and it's theirs from here.</summary>
+    public string BuildOnConnection(Connection c)
+    {
+        string name = Create(c.Explanation.Split("\n\n")[0], false, Status.Inbox, null, [c.A, c.B]);
+        AcceptConnection(c);
+        return name;
     }
 
     /// <summary>Moves a Thought's words to the end of another Thought's body and removes the first note. The target is
@@ -163,6 +236,9 @@ sealed partial class Vault(string root)
         SetBody(target, body + "\n\n" + added);
         File.Delete(sourcePath);
         File.Delete(CardPath(source));
+        // A suggestion about a note that no longer exists can't be answered.
+        foreach (var c in ReadConnections().Where(c => c.State == ConnectionState.Suggested && c.Involves(source)))
+            File.Delete(ConnectionPath(c.Name));
         return undo;
     }
 

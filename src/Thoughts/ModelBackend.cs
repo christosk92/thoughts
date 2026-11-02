@@ -6,7 +6,7 @@ using FluentGpu.WindowsApi.Credentials;
 
 namespace Thoughts;
 
-sealed record ModelRequest(string Model, string System, string User, string SchemaJson, int MaxTokens);
+sealed record ModelRequest(string Model, string System, string User, string SchemaJson, int MaxTokens, string Effort = "medium");
 
 /// <summary>Json is null when the model declined or stopped early, and Declined says why. Tokens feed the Usage page.</summary>
 sealed record ModelReply(string? Json, string? Declined, long InputTokens, long OutputTokens, long CacheReadTokens, long CacheWriteTokens);
@@ -92,7 +92,7 @@ sealed class AnthropicBackend : IModelBackend
             w.WriteEndArray();
 
             w.WriteStartObject("output_config");
-            w.WriteString("effort", "medium");
+            w.WriteString("effort", request.Effort);
             w.WriteStartObject("format");
             w.WriteString("type", "json_schema");
             w.WritePropertyName("schema");
