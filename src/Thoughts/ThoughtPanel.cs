@@ -19,6 +19,8 @@ sealed record PanelActions(
     Func<string, (int Done, int Total)> PieceCount,
     Func<string, IReadOnlyList<Connection>> ConnectionsOf,
     Action<string> OpenMap,
+    Func<string, PendingSuggestion?> SuggestionOf,
+    SuggestionActions Suggestions,
     ConnectionActions Connections,
     IReadSignal<string?> Message);
 
@@ -207,6 +209,7 @@ sealed class ThoughtPanel(PanelActions actions) : Component
 
         var (piecesDone, piecesTotal) = actions.PieceCount(t.Title);
         var connections = actions.ConnectionsOf(t.Title);
+        var pending = actions.SuggestionOf(t.Title);
         var tint = ProjectTint(t.Project);
         return new BoxEl
         {
@@ -251,6 +254,9 @@ sealed class ThoughtPanel(PanelActions actions) : Component
                         Children = Steps.Select(s => Step(s, t.Status == s, () => actions.SetStatus(t, s))).ToArray(),
                     },
                     piecesTotal > 0 ? Caption($"{piecesDone} of {piecesTotal} done") with { Color = Tok.TextSecondary } : new BoxEl { Visible = false },
+                    pending is not null && SuggestionView.HasAny(t, pending)
+                        ? SuggestionView.Create(t, pending, actions.Suggestions)
+                        : new BoxEl { Key = "no-suggestion", Visible = false },
                     connections.Count > 0
                         ? new BoxEl
                         {

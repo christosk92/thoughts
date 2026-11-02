@@ -24,7 +24,7 @@ Add as detail moved the words to the end of the target and removed the first not
 Choices made here: `from` is written only on a click, not automatically on a strong suggestion, because the design lists the links the AI may write and `from` isn't among them. Every Thought up to 300 is sent as title, Status, Project, card and a best-matching snippet of up to 200 characters.
 
 Left out:
-- Closing the strip loses the suggestion, until suggestions are kept for the panel and Review (tickets 09 and 11).
+- Closing the strip used to lose the suggestion. Ticket 11 fixed that: it stays in the panel and Review.
 - If the AI suggests no relation, there is no way yet to pick a target by hand.
 - Undo lasts only while the strip is open, and doesn't survive a restart.
 - The panel doesn't show `from` yet.

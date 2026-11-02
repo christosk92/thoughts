@@ -14,6 +14,9 @@ sealed record BuildOnUndo(string Source, string SourceNote, string? SourceCard, 
 enum ConnectionState { Suggested, Accepted, Dismissed }
 
 /// <summary>A note in <c>Connections/</c>. The two Thoughts always come from <c>between</c>, never from the file name.</summary>
+/// <summary>What Organize suggested and the person hasn't answered, kept so it's still there after the capture strip closes.</summary>
+sealed record PendingSuggestion(string? Project, string? NewProject, string? Why, ThoughtRelation? Relation);
+
 sealed record Connection(string Name, string A, string B, ConnectionState State, string Kind, string Explanation)
 {
     public bool Involves(string title) => string.Equals(A, title, StringComparison.OrdinalIgnoreCase) || string.Equals(B, title, StringComparison.OrdinalIgnoreCase);
@@ -21,7 +24,7 @@ sealed record Connection(string Name, string A, string B, ConnectionState State,
     public string OtherThan(string title) => string.Equals(A, title, StringComparison.OrdinalIgnoreCase) ? B : A;
 }
 
-sealed record Thought(string Title, Status Status, string? Project, string Body, string Created = "", bool KeepLocal = false, bool Organized = false, string From = "")
+sealed record Thought(string Title, Status Status, string? Project, string Body, string Created = "", bool KeepLocal = false, bool Organized = false, string From = "", string Reviewed = "")
 {
     /// <summary>The Thoughts this one came from. Held as one string so that records still compare by value.</summary>
     public bool CameFrom(string title) => From.Split('\n').Contains(title, StringComparer.OrdinalIgnoreCase);
@@ -125,7 +128,11 @@ sealed partial class Vault(string root)
     public void SetKeepLocal(string title, bool keepLocal)
     {
         SetProperty(ThoughtPath(title), "keep_local", keepLocal ? "true" : null);
-        if (keepLocal) File.Delete(CardPath(title));
+        if (keepLocal)
+        {
+            File.Delete(CardPath(title));
+            ClearSuggestion(title);
+        }
     }
 
     /// <summary>The app's own store. Obsidian ignores dot folders (ADR 0001).</summary>
@@ -137,6 +144,49 @@ sealed partial class Vault(string root)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(CardPath(title))!);
         WriteDurably(CardPath(title), json + "\n", overwrite: true);
+    }
+
+    /// <summary>The day the person last looked at this Thought, which Review uses.</summary>
+    public void SetReviewed(string title, DateTime day) => SetProperty(ThoughtPath(title), "reviewed", day.ToString("yyyy-MM-dd"));
+
+    string SuggestionPath(string title) => Path.Combine(StoreDir, "suggestions", title + ".json");
+
+    public void SaveSuggestion(string title, PendingSuggestion s)
+    {
+        var json = new JsonObject { ["project"] = s.Project, ["new_project"] = s.NewProject, ["why"] = s.Why };
+        if (s.Relation is { } r)
+            json["relation"] = new JsonObject { ["more_detail"] = r.MoreDetail, ["target"] = r.Target, ["evidence"] = r.Evidence, ["why"] = r.Why };
+        Directory.CreateDirectory(Path.GetDirectoryName(SuggestionPath(title))!);
+        WriteDurably(SuggestionPath(title), json.ToJsonString(), overwrite: true);
+    }
+
+    public void ClearSuggestion(string title) => File.Delete(SuggestionPath(title));
+
+    /// <summary>A suggestion for a note that no longer exists, or that the file doesn't make sense of, is left out.</summary>
+    public List<(string Title, PendingSuggestion Suggestion)> ReadSuggestions()
+    {
+        string dir = Path.Combine(StoreDir, "suggestions");
+        if (!Directory.Exists(dir)) return [];
+        var found = new List<(string, PendingSuggestion)>();
+        foreach (string path in Directory.EnumerateFiles(dir, "*.json").Order(StringComparer.Ordinal))
+        {
+            string title = Path.GetFileNameWithoutExtension(path);
+            if (!File.Exists(ThoughtPath(title))) continue;
+            try
+            {
+                if (JsonNode.Parse(File.ReadAllText(path)) is not JsonObject o) continue;
+                ThoughtRelation? relation = o["relation"] is JsonObject r
+                    ? new ThoughtRelation((bool?)r["more_detail"] ?? false, (string?)r["target"] ?? "", (string?)r["evidence"] ?? "", (string?)r["why"] ?? "")
+                    : null;
+                if (relation is not null && !File.Exists(ThoughtPath(relation.Target))) relation = null;
+                found.Add((title, new PendingSuggestion((string?)o["project"], (string?)o["new_project"], (string?)o["why"], relation)));
+            }
+            catch (Exception e) when (e is IOException or System.Text.Json.JsonException or InvalidOperationException)
+            {
+                // It's only a suggestion. The Thought itself is fine.
+            }
+        }
+        return found;
     }
 
     public string? ReadCard(string title) => File.Exists(CardPath(title)) ? File.ReadAllText(CardPath(title)) : null;
@@ -236,6 +286,7 @@ sealed partial class Vault(string root)
         SetBody(target, body + "\n\n" + added);
         File.Delete(sourcePath);
         File.Delete(CardPath(source));
+        ClearSuggestion(source);
         // A suggestion about a note that no longer exists can't be answered.
         foreach (var c in ReadConnections().Where(c => c.State == ConnectionState.Suggested && c.Involves(source)))
             File.Delete(ConnectionPath(c.Name));
@@ -392,6 +443,7 @@ sealed partial class Vault(string root)
         File.Move(from, Path.Combine(dir, clean + ".md"));
         RewriteLinks(oldName, clean);
         if (File.Exists(CardPath(oldName))) File.Move(CardPath(oldName), CardPath(clean), overwrite: true);
+        if (File.Exists(SuggestionPath(oldName))) File.Move(SuggestionPath(oldName), SuggestionPath(clean), overwrite: true);
         return clean;
     }
 
@@ -465,10 +517,11 @@ sealed partial class Vault(string root)
         string? project = null;
         string created = "";
         bool keepLocal = false;
-        string from = "";
+        string from = "", reviewed = "";
         if (TryParseProperties(properties) is { } map)
         {
             from = FromLinks(map);
+            reviewed = Scalar(map, "reviewed") ?? "";
             if (Scalar(map, "status") is { } value && Enum.TryParse<Status>(value, ignoreCase: true, out var parsed))
                 status = parsed;
             project = LinkTarget(Scalar(map, "project"));
@@ -480,7 +533,7 @@ sealed partial class Vault(string root)
         {
             keepLocal = true;
         }
-        return new Thought(title, status, project, body.Trim(), created, keepLocal, false, from);
+        return new Thought(title, status, project, body.Trim(), created, keepLocal, false, from, reviewed);
     }
 
     // Obsidian or a sync tool may be writing the same file, so share it, and wait out a moment's lock.

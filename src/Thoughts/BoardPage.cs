@@ -56,6 +56,9 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
         var queue = UseSignal(OrganizeQueue.Empty);
         var connections = UseSignal(LoadConnections(settings.VaultPath));
         var mapFocus = UseSignal<string?>(null);
+        var reviewing = UseSignal<IReadOnlyList<string>?>(null);
+        var reviewAt = UseSignal(0);
+        var suggestions = UseSignal(LoadSuggestions(settings.VaultPath));
         var showUsage = UseSignal(false);
         var usageCalls = UseSignal<IReadOnlyList<UsageCall>>([]);
         var budget = UseSignal(settings.BudgetUsd);
@@ -90,6 +93,8 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
             }
             var freshConnections = LoadConnections(vaultPath.Peek());
             if (!freshConnections.SequenceEqual(connections.Peek())) connections.Value = freshConnections;
+            var freshSuggestions = LoadSuggestions(vaultPath.Peek());
+            if (!freshSuggestions.SequenceEqual(suggestions.Peek())) suggestions.Value = freshSuggestions;
             var freshProjects = LoadProjects(vaultPath.Peek());
             if (!freshProjects.SequenceEqual(projects.Peek())) projects.Value = freshProjects;
             var freshHealth = LoadHealth(vaultPath.Peek());
@@ -267,7 +272,11 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
 
         void LinkAsNewWork(string source, string target)
         {
-            Change(v => v.AddFrom(source, target));
+            Change(v =>
+            {
+                v.AddFrom(source, target);
+                v.ClearSuggestion(source);
+            });
             stripOpen.Value = false;
         }
 
@@ -281,15 +290,24 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
             organizer.Value?.Wake();
         }
 
-        void SetStatus(Thought t, Status status)
+        void SetStatus(Thought t, Status status) => TrySetStatus(t, status);
+
+        bool TrySetStatus(Thought t, Status status)
         {
             if (status == Status.Doing && t.Status != Status.Doing
                 && thoughts.Peek().Count(x => x.Status == Status.Doing) >= DoingLimit)
             {
                 message.Value = $"Doing is full ({DoingLimit}). Move something out of Doing first.";
-                return;
+                return false;
             }
             Change(v => v.SetStatus(t.Title, status));
+            return true;
+        }
+
+        void Reviewed(Thought t)
+        {
+            Change(v => v.SetReviewed(t.Title, DateTime.Today));
+            reviewAt.Value = reviewAt.Peek() + 1;
         }
 
         IReadOnlyList<MenuFlyoutItem> CardMenu(Thought t)
@@ -353,6 +371,21 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                 Move(t, status ?? t.Status, project ?? t.Project ?? Unsorted);
             });
 
+        var suggestionActions = UseMemo(() => new SuggestionActions(
+            MoveToProject: (t, project) => Change(v =>
+            {
+                v.SetProject(t.Title, project);
+                v.ClearSuggestion(t.Title);
+            }),
+            CreateProject: (t, name) => Change(v =>
+            {
+                v.AddProject(name);
+                v.SetProject(t.Title, name);
+                v.ClearSuggestion(t.Title);
+            }),
+            AddAsDetail: (t, target) => AddAsDetail(t.Title, target),
+            KeepAsNewWork: (t, target) => LinkAsNewWork(t.Title, target),
+            Dismiss: t => Change(v => v.ClearSuggestion(t.Title))), DepKey.Empty);
         var connectionActions = UseMemo(() => new ConnectionActions(
             Accept: c => Change(v => v.AcceptConnection(c)),
             Dismiss: c => Change(v => v.DismissConnection(c)),
@@ -398,6 +431,8 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
             ConnectionsOf: title => connections.Value.Where(c => c.State != ConnectionState.Dismissed && c.Involves(title)).ToList(),
             Connections: connectionActions,
             OpenMap: title => mapFocus.Value = title,
+            SuggestionOf: title => suggestions.Value.FirstOrDefault(x => x.Title == title).Suggestion,
+            Suggestions: suggestionActions,
             PieceCount: title =>
             {
                 var pieces = thoughts.Value.Where(x => x.CameFrom(title) && x.Status != Status.Dropped).ToList();
@@ -665,7 +700,11 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
             if (found.SuggestedProject is { } suggested)
                 actions.Add(Button.Standard($"Move to {suggested}", () =>
                 {
-                    Change(v => v.SetProject(found.Title, suggested));
+                    Change(v =>
+                    {
+                        v.SetProject(found.Title, suggested);
+                        v.ClearSuggestion(found.Title);
+                    });
                     stripOpen.Value = false;
                 }));
             if (found.NewProject is { } brandNew)
@@ -675,6 +714,7 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                     {
                         v.AddProject(brandNew);
                         v.SetProject(found.Title, brandNew);
+                        v.ClearSuggestion(found.Title);
                     });
                     stripOpen.Value = false;
                 }));
@@ -688,7 +728,11 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                     : Button.Accent("Keep as new work", () => LinkAsNewWork(found.Title, relation.Target));
                 actions.Add(relation.MoreDetail ? addDetail : newWork);
                 actions.Add(relation.MoreDetail ? newWork : addDetail);
-                actions.Add(Button.Subtle("Unrelated", () => stripOpen.Value = false));
+                actions.Add(Button.Subtle("Unrelated", () =>
+                {
+                    Change(v => v.ClearSuggestion(found.Title));
+                    stripOpen.Value = false;
+                }));
             }
             actions.Add(new BoxEl { Grow = 1f });
             actions.Add(Button.Subtle("Open", () =>
@@ -724,6 +768,7 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
         var all = thoughts.Value;
         int droppedCount = all.Count(t => t.Status == Status.Dropped);
         var rowNames = RowNames(projects.Value, all);
+        int reviewCount = ReviewQueue.Select(all, DateTime.Today).Count;
 
         BoxEl Cell(Element child, bool lead = false, DropTargetSpec? drop = null, string? dropId = null) => new()
         {
@@ -814,6 +859,12 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                             MinWidth = 0f,
                             Children = [new TextEl(string.Join(" · ", new[] { message.Value, aiStatus.Value, BudgetNote(usageRatio) }.Where(s => s is not null))) { Size = 14f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, Shrink = 1f, MinWidth = 0f }],
                         },
+                        Button.Standard(reviewCount > 0 ? $"Review {reviewCount}" : "Review", () =>
+                        {
+                            message.Value = null;
+                            reviewing.Value = ReviewQueue.Select(thoughts.Peek(), DateTime.Today);
+                            reviewAt.Value = 0;
+                        }),
                         Button.Standard(usageRatio >= 1 ? "Usage: Budget used up" : usageRatio >= UsageLog.WarnAt ? $"Usage: {usageRatio * 100:F0}%" : "Usage", () => showUsage.Value = true),
                         Button.Standard(health.Value.Issues switch
                         {
@@ -868,7 +919,40 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
         var open = selected.Value is { } title ? all.FirstOrDefault(t => t.Title == title) : null;
         // The Map takes the Board's place, under the panel, so clicking a Thought on it opens the same panel.
         var layers = new List<Element>();
-        if (mapFocus.Value is { } focus && all.Any(t => t.Title == focus))
+        if (reviewing.Value is { } reviewList)
+        {
+            var left = reviewList.Skip(reviewAt.Value).Select(title => all.FirstOrDefault(t => t.Title == title)).Where(t => t is not null).ToList();
+            var now = left.FirstOrDefault();
+            var pendingNow = now is null ? null : suggestions.Value.FirstOrDefault(x => x.Title == now.Title).Suggestion;
+            layers.Add(new BoxEl
+            {
+                Key = "review-layer",
+                Direction = 1,
+                Grow = 1f,
+                Children =
+                [
+                    Embed.Comp(new ReviewProps(
+                        now,
+                        reviewList.Count - left.Count + 1,
+                        reviewList.Count,
+                        now is null ? [] : connections.Value.Where(c => c.State != ConnectionState.Dismissed && c.Involves(now.Title)).ToList(),
+                        now is null ? [] : now.From.Split('\n', StringSplitOptions.RemoveEmptyEntries),
+                        now is null ? [] : all.Where(t => t.CameFrom(now.Title)).Select(t => t.Title).ToList(),
+                        now is not null && pendingNow is not null && SuggestionView.HasAny(now, pendingNow) ? pendingNow : null,
+                        connectionActions,
+                        suggestionActions,
+                        (t, status) =>
+                        {
+                            if (TrySetStatus(t, status)) Reviewed(t);
+                        },
+                        Reviewed,
+                        title => selected.Value = title,
+                        () => reviewing.Value = null,
+                        message.Value), () => new ReviewPage()),
+                ],
+            });
+        }
+        else if (mapFocus.Value is { } focus && all.Any(t => t.Title == focus))
             layers.Add(new BoxEl
             {
                 Key = "map-layer",
@@ -953,6 +1037,7 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
 
     static VaultHealth LoadHealth(string? path) => path is null ? new VaultHealth([], []) : new Vault(path).CheckHealth();
     static List<Thought> LoadThoughts(string? path) => path is null ? [] : new Vault(path).ReadThoughts();
+    static List<(string Title, PendingSuggestion Suggestion)> LoadSuggestions(string? path) => path is null ? [] : new Vault(path).ReadSuggestions();
     static List<Connection> LoadConnections(string? path) => path is null ? [] : new Vault(path).ReadConnections();
     static List<string> LoadProjects(string? path) => path is null ? [] : new Vault(path).ReadProjects();
     static List<Thought> DroppedOf(List<Thought> all) => all.Where(t => t.Status == Status.Dropped).ToList();

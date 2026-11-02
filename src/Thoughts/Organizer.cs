@@ -248,6 +248,8 @@ sealed class Organizer(Vault vault, Func<IModelBackend?> backend, Action<Organiz
             return;
         }
         var outcome = Apply(note, reply.Json, projects, people, candidates);
+        if (outcome.SuggestedProject is not null || outcome.NewProject is not null || outcome.Relation is not null)
+            vault.SaveSuggestion(outcome.Title, new PendingSuggestion(outcome.SuggestedProject, outcome.NewProject, outcome.Why, outcome.Relation));
         done(outcome);
         EnqueueConnect(outcome.Title, reply.Json, candidates, outcome.Relation?.Target);
     }
