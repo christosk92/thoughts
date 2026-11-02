@@ -9,6 +9,9 @@ sealed class AppSettings
 {
     public string? VaultPath { get; set; }
 
+    /// <summary>US dollars a month the AI may spend. Reaching it pauses AI work, never capture.</summary>
+    public double BudgetUsd { get; set; } = 20;
+
     public static string DefaultFile => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Thoughts", "settings.json");
 

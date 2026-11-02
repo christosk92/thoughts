@@ -15,11 +15,12 @@ sealed record OrganizeQueue(string? Current, IReadOnlyList<string> Waiting, IRea
 /// <summary>Organizes new Thoughts in the background. Capture has already saved the note, so nothing here can lose one: a
 /// failure leaves the Thought in the queue on disk to try again, including after a restart. Keep-local Thoughts are
 /// checked again immediately before sending and are never sent.</summary>
-sealed class Organizer(Vault vault, Func<IModelBackend?> backend, Action<OrganizeOutcome> done, Action<string?> status, Action<OrganizeQueue> queue) : IDisposable
+sealed class Organizer(Vault vault, Func<IModelBackend?> backend, Action<OrganizeOutcome> done, Action<string?> status, Action<OrganizeQueue> queue, UsageLog usage, Func<double> budget) : IDisposable
 {
     const string Model = "claude-sonnet-5-5";
     const int MaxTokens = 2000;
     static readonly int[] RetryDelaysMs = [5_000, 30_000, 120_000, 600_000];
+    static readonly TimeSpan PausedRecheck = TimeSpan.FromHours(1); // A new month ends a pause, and nothing wakes this for that.
 
     /// <summary>Debug check that Keep-local Thoughts stay out: every request's user turn is appended here when set.</summary>
     public static string? RequestLog;
@@ -88,6 +89,14 @@ sealed class Organizer(Vault vault, Func<IModelBackend?> backend, Action<Organiz
             if (title is null)
             {
                 await _wake.WaitAsync(_stop.Token).ContinueWith(_ => { });
+                continue;
+            }
+            if (usage.SpentThisMonth() >= budget())
+            {
+                // Waiting Thoughts stay in the queue on disk. Raising the Budget wakes this.
+                Working(null);
+                status(null);
+                await Task.WhenAny(_wake.WaitAsync(_stop.Token), Task.Delay(PausedRecheck, _stop.Token)).ContinueWith(_ => { });
                 continue;
             }
             try
@@ -167,7 +176,9 @@ sealed class Organizer(Vault vault, Func<IModelBackend?> backend, Action<Organiz
         string user = BuildUserTurn(note, projects, people);
         if (RequestLog is { } log) File.AppendAllText(log, user + "\n");
 
-        var reply = await model.Complete(new ModelRequest(Model, SystemPrompt, user, Schema, MaxTokens), _stop.Token);
+        var request = new ModelRequest(Model, SystemPrompt, user, Schema, MaxTokens);
+        var reply = await model.Complete(request, _stop.Token);
+        usage.Record("Organize", request, reply);
         if (RequestLog is { } usageLog)
             File.AppendAllText(usageLog, $"USAGE in={reply.InputTokens} out={reply.OutputTokens} cacheRead={reply.CacheReadTokens} cacheWrite={reply.CacheWriteTokens} declined={reply.Declined}\nREPLY {reply.Json}\n");
         if (reply.Json is null)

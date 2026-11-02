@@ -53,6 +53,9 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
         var keyState = UseSignal(ApiKey.Describe());
         var organizer = UseRef<Organizer?>(null);
         var queue = UseSignal(OrganizeQueue.Empty);
+        var showUsage = UseSignal(false);
+        var usageCalls = UseSignal<IReadOnlyList<UsageCall>>([]);
+        var budget = UseSignal(settings.BudgetUsd);
         var settling = UseSignal<IReadOnlyDictionary<string, string>>(new Dictionary<string, string>());
         var cardKeys = UseRef(new Dictionary<string, string>()); // A card keeps its identity when the AI renames its note.
         var post = UsePost();
@@ -175,6 +178,13 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
         UseEffect(() =>
         {
             if (vaultPath.Value is not { } path) return (Action?)null;
+            var usage = new UsageLog(new Vault(path).StoreDir);
+            usage.Changed = () =>
+            {
+                var calls = usage.ThisMonth();
+                post(() => usageCalls.Value = calls);
+            };
+            usage.Changed();
             var running = new Organizer(new Vault(path),
                 () => ApiKey.Find() is { } key ? new AnthropicBackend(key) : null,
                 outcome => post(() =>
@@ -201,7 +211,9 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                     lastCaptured.Value = outcome.Title == lastCaptured.Value ? null : lastCaptured.Value;
                 }),
                 text => post(() => aiStatus.Value = text),
-                state => post(() => queue.Value = state));
+                state => post(() => queue.Value = state),
+                usage,
+                () => settings.BudgetUsd);
             organizer.Value = running;
             running.Start();
             return () =>
@@ -210,6 +222,15 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                 running.Dispose();
             };
         });
+
+        void ChangeBudget(double amount)
+        {
+            if (double.IsNaN(amount) || amount < 0) return;
+            budget.Value = amount;
+            settings.BudgetUsd = amount;
+            if (canSave) settings.Save(settingsFile);
+            organizer.Value?.Wake();
+        }
 
         void SaveKey()
         {
@@ -532,6 +553,12 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
             };
         }
 
+        if (showUsage.Value)
+        {
+            _ = budget.Value; // The page's totals follow the Budget as it changes.
+            return UsagePage.Create(usageCalls.Value, budget, ChangeBudget, () => showUsage.Value = false);
+        }
+
         Element StripContent()
         {
             if (strip.Peek() is not { } found) return new BoxEl();
@@ -577,6 +604,7 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
             };
         }
 
+        double usageRatio = budget.Value > 0 ? usageCalls.Value.Sum(c => c.Cost) / budget.Value : 1;
         var all = thoughts.Value;
         int droppedCount = all.Count(t => t.Status == Status.Dropped);
         var rowNames = RowNames(projects.Value, all);
@@ -668,8 +696,9 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                             Grow = 1f,
                             Shrink = 1f,
                             MinWidth = 0f,
-                            Children = [new TextEl(string.Join(' ', new[] { message.Value, aiStatus.Value }.Where(s => s is not null))) { Size = 14f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, Shrink = 1f, MinWidth = 0f }],
+                            Children = [new TextEl(string.Join(" · ", new[] { message.Value, aiStatus.Value, BudgetNote(usageRatio) }.Where(s => s is not null))) { Size = 14f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, Shrink = 1f, MinWidth = 0f }],
                         },
+                        Button.Standard(usageRatio >= 1 ? "Usage: Budget used up" : usageRatio >= UsageLog.WarnAt ? $"Usage: {usageRatio * 100:F0}%" : "Usage", () => showUsage.Value = true),
                         Button.Standard(health.Value.Issues switch
                         {
                             0 => "Settings",
@@ -775,6 +804,11 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
     }
 
     // The vault's folders plus this app's own files, whose changes never affect what's on the Board.
+    static string? BudgetNote(double ratio) =>
+        ratio >= 1 ? "AI paused"
+        : ratio >= UsageLog.WarnAt ? $"{ratio * 100:F0}% of Budget used"
+        : null;
+
     static bool IsSettingsPath(string? relative) =>
         relative is not null && relative.Split(Path.DirectorySeparatorChar)[0].StartsWith('.');
 
