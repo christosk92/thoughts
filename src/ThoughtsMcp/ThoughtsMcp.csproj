@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>14</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <PublishAot>true</PublishAot>
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+    <AssemblyName>thoughts-mcp</AssemblyName>
+    <RootNamespace>Thoughts</RootNamespace>
+    <EngineRoot Condition="'$(EngineRoot)' == ''">$(MSBuildThisFileDirectory)..\..\..\fluent-gpu\</EngineRoot>
+  </PropertyGroup>
+
+  <!-- The same files as the app, so a Caller is held to exactly the same rules. -->
+  <ItemGroup>
+    <Compile Include="..\Thoughts\Vault.cs" Link="Shared\Vault.cs" />
+    <Compile Include="..\Thoughts\AppSettings.cs" Link="Shared\AppSettings.cs" />
+    <Compile Include="..\Thoughts\ModelBackend.cs" Link="Shared\ModelBackend.cs" />
+    <Compile Include="..\Thoughts\Usage.cs" Link="Shared\Usage.cs" />
+    <Compile Include="..\Thoughts\Connect.cs" Link="Shared\Connect.cs" />
+    <Compile Include="..\Thoughts\OrganizeRules.cs" Link="Shared\OrganizeRules.cs" />
+    <Compile Include="..\Thoughts\CallerQueue.cs" Link="Shared\CallerQueue.cs" />
+    <Compile Include="..\Thoughts\OrganizeOutcome.cs" Link="Shared\OrganizeOutcome.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="YamlDotNet" Version="16.3.0" />
+    <ProjectReference Include="$(EngineRoot)src\FluentGpu.WindowsApi\FluentGpu.WindowsApi.csproj" />
+  </ItemGroup>
+
+</Project>

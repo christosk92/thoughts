@@ -91,6 +91,8 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                 thoughts.Value = fresh;
                 dropped.Value = DroppedOf(fresh);
             }
+            organizer.Value?.Refresh();
+            if (vaultPath.Peek() is { } usagePath) usageCalls.Value = new UsageLog(new Vault(usagePath).StoreDir).ThisMonth();
             var freshConnections = LoadConnections(vaultPath.Peek());
             if (!freshConnections.SequenceEqual(connections.Peek())) connections.Value = freshConnections;
             var freshSuggestions = LoadSuggestions(vaultPath.Peek());
@@ -317,6 +319,11 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
             foreach (var status in AllStatuses)
                 items.Add(MenuFlyoutItem.RadioItem(status.ToString(), t.Status == status, () => SetStatus(t, status)));
             items.Add(MenuFlyoutItem.Separator);
+            if (queue.Peek().ForCaller?.Contains(t.Title) == true)
+            {
+                items.Add(new MenuFlyoutItem("Organize with API key", Invoke: () => organizer.Value?.OrganizeWithKey(t.Title)));
+                items.Add(MenuFlyoutItem.Separator);
+            }
             var moves = new List<MenuFlyoutItem>();
             foreach (var project in projects.Peek())
                 moves.Add(MenuFlyoutItem.RadioItem(project, t.Project == project, () => Change(v => v.SetProject(t.Title, project))));
@@ -472,6 +479,7 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
             else if (state.Failed.Contains(t.Title))
                 line = FooterLine("failed", Icon(Icons.Warning, 12f) with { Color = Tok.SystemFillCaution }, FooterText("Couldn't organize"),
                     HyperlinkButton.Create("Retry", () => organizer.Value?.Enqueue(t.Title)));
+            else if (state.ForCaller?.Contains(t.Title) == true) line = FooterLine("caller", Icon(Icons.Clock, 12f), FooterText("Waiting for a Caller"));
             else if (state.Waiting.Contains(t.Title)) line = FooterLine("waiting", Icon(Icons.Clock, 12f), FooterText("Waiting to organize"));
             else if (t.Project is not null || t.Organized || suggested > 0 || state.Connecting == t.Title)
                 line = FooterLine("filed", [
@@ -665,6 +673,7 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                                     keyState.Value = ApiKey.Describe();
                                 })),
                             Body(LocalIndex.Describe()),
+                            Embed.Comp(() => new McpSettingsSection(vaultPath)),
                             Embed.Comp(() => new AiSettingsSection(settings, () =>
                             {
                                 if (canSave) settings.Save(settingsFile);
@@ -863,7 +872,7 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                             Grow = 1f,
                             Shrink = 1f,
                             MinWidth = 0f,
-                            Children = [new TextEl(string.Join(" · ", new[] { message.Value, aiStatus.Value, BudgetNote(usageRatio) }.Where(s => s is not null))) { Size = 14f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, Shrink = 1f, MinWidth = 0f }],
+                            Children = [new TextEl(string.Join(" · ", new[] { message.Value, aiStatus.Value, BudgetNote(usageRatio), queue.Value.ForCaller is { Count: > 0 } callerWork ? $"{callerWork.Count} waiting for a Caller" : null }.Where(s => s is not null))) { Size = 14f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, Shrink = 1f, MinWidth = 0f }],
                         },
                         Button.Standard(reviewCount > 0 ? $"Review {reviewCount}" : "Review", () =>
                         {

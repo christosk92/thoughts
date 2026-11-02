@@ -17,7 +17,7 @@ sealed class UsageLog(string storeDir)
 
     public Action? Changed { get; set; }
 
-    public void Record(string step, ModelRequest request, ModelReply reply)
+    public void Record(string step, ModelRequest request, ModelReply reply, bool free = false)
     {
         using var stream = new MemoryStream();
         using (var w = new Utf8JsonWriter(stream))
@@ -30,7 +30,7 @@ sealed class UsageLog(string storeDir)
             w.WriteNumber("output", reply.OutputTokens);
             w.WriteNumber("cache_read", reply.CacheReadTokens);
             w.WriteNumber("cache_write", reply.CacheWriteTokens);
-            w.WriteNumber("cost", ModelPrices.Cost(request.Model, reply));
+            w.WriteNumber("cost", free ? 0d : ModelPrices.Cost(request.Model, reply));
             w.WriteEndObject();
         }
         lock (_lock)
@@ -42,6 +42,13 @@ sealed class UsageLog(string storeDir)
             file.Flush(flushToDisk: true);
         }
         Changed?.Invoke();
+    }
+
+    /// <summary>Work a Caller did on its own model. It costs nothing here, and which model is only what the Caller said.</summary>
+    public void RecordCaller(string step, string client, string model)
+    {
+        var request = new ModelRequest($"{model} via {client}, self-reported", "", "", "", 0);
+        Record(step, request, new ModelReply(null, null, 0, 0, 0, 0), free: true);
     }
 
     /// <summary>This calendar month's calls, oldest first. A line that can't be read is skipped rather than stopping the page.</summary>

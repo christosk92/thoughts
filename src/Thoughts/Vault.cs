@@ -152,6 +152,29 @@ sealed partial class Vault(string root)
     /// <summary>The day the person last looked at this Thought, which Review uses.</summary>
     public void SetReviewed(string title, DateTime day) => SetProperty(ThoughtPath(title), "reviewed", day.ToString("yyyy-MM-dd"));
 
+    string McpFile => Path.Combine(StoreDir, "mcp.json");
+
+    /// <summary>Whether MCP Callers may pull other Thoughts, search them and run Connect. Off until the person turns it on, per Vault.</summary>
+    public bool CallersMayPull
+    {
+        get
+        {
+            try
+            {
+                return File.Exists(McpFile) && (bool?)JsonNode.Parse(File.ReadAllText(McpFile))?["pull"] == true;
+            }
+            catch (Exception e) when (e is IOException or System.Text.Json.JsonException or InvalidOperationException)
+            {
+                return false;
+            }
+        }
+        set
+        {
+            Directory.CreateDirectory(StoreDir);
+            WriteDurably(McpFile, new JsonObject { ["pull"] = value }.ToJsonString(), overwrite: true);
+        }
+    }
+
     string SuggestionPath(string title) => Path.Combine(StoreDir, "suggestions", title + ".json");
 
     public void SaveSuggestion(string title, PendingSuggestion s)
