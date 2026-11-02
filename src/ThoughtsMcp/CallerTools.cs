@@ -87,7 +87,7 @@ sealed class CallerTools(Vault vault, AppSettings settings, string client)
             w.WriteString("title", title);
             w.WriteString("step", "organize");
             w.WriteString("next_tool", "submit_organize");
-            w.WriteString("how", "Follow instructions, using data as the note and the lists. Answer with JSON matching schema, and pass it as result. " + TreatAsData);
+            w.WriteString("how", "Follow instructions, using data as the note and the lists. Answer with JSON matching schema, and pass it as result, with the title exactly as given here, not the new one you propose. " + TreatAsData);
             w.WriteString("instructions", OrganizeRules.InLanguage(OrganizeRules.SystemPrompt, settings.Language));
             w.WritePropertyName("schema");
             Compact.Write(w, OrganizeRules.Schema);

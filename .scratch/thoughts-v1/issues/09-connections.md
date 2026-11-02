@@ -13,7 +13,7 @@
 - [x] Accept adds `connected` on both Thoughts, and Dismiss never comes back
 - [x] Build on it creates a Thought pre-filled with the explanation, coming `from` both
 - [x] Cards are not shown to Connect, only used to select notes
-- [ ] The Connections appear correctly in Obsidian's graph (the notes match the format tested in `docs/research/2026-11-01-obsidian-links.md`, but Obsidian wasn't opened on them)
+- [x] The Connections appear correctly in Obsidian's graph
 - [x] Verify on the throwaway vault with the real AI and report the AI cost of the check.
 
 ## Comments
@@ -48,3 +48,5 @@ Left out:
 - Review shows them in ticket 11.
 
 Not driven: a real mouse, Obsidian's graph, Open on a Connection's link, a Connection to a note renamed later, and the note changing during a Connect call.
+
+Later on 2026-11-02, the real Obsidian ran in an isolated profile, leaving the owner's config unchanged, on a vault whose Connection came from a real run. `state`, `kind` and `between` read correctly, both links resolved, and the graph drew the Connection as a node with an edge to each Thought. The app's filter and colour groups loaded, and `.thoughts` stayed hidden. With the Connection accepted as the app writes it, by hand in that fake vault, the filter hid the Connection note and a direct line joined the two Thoughts. Nodes and links were read from the graph's renderer, not checked by eye.

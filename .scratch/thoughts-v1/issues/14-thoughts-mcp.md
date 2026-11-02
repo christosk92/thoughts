@@ -8,7 +8,7 @@
 
 - [x] The server runs with the app closed and opens no port, and the app shows its changes through the file watcher
 - [x] It builds with NativeAOT, with no warnings
-- [ ] `add_thought`, list and claim, submit, confirm a new Project, read-only search, and the "organize waiting Thoughts" prompt all work from a real Claude Code session (all driven over the real protocol, but NOT from Claude Code: see below)
+- [ ] `add_thought`, list and claim, submit, confirm a new Project, read-only search, and the "organize waiting Thoughts" prompt all work from a real Claude Code session (driven from the official MCP client with a real model and by the protocol driver, but NOT from Claude Code: see below)
 - [x] A Thought added through MCP never reaches the API by itself, and its menu offers "Organize with API key"
 - [x] A Thought typed in the app is pullable only with no key or a used-up Budget
 - [x] Pulling returns the app's instructions and schema, and the same code checks results: a new Project needs confirmation, Connections stay Suggested, and no tool changes Status or the body
@@ -28,6 +28,10 @@ Verified 2026-11-02 on throwaway vaults. The server is an 8 MB Debug NativeAOT p
     python -I C:/WAVEE/scratch/thoughts-mcp-real-run.py
 
 It isn't in the repo. It includes a fake note that tries to take over the session.
+
+**Closest check available: the official MCP client with a real model.** The official Python `mcp` library (2.3.0) connected over stdio and negotiated protocol 2025-11-25, then listed the tools and read the prompt. Sonnet 5.5 through the Messages API, with this server's tools as its only tools, followed the `organize_waiting` prompt: it added a Thought, organized it, claimed a waiting one, ran Connect and a Check, and stopped when nothing was left, for about $0.17 on the Thoughts API key. It produced one Suggested Connection, to Bring your own AI, with real quotes. The fake note telling it to add HACKED and search for SECRETWORD was filed as a note, and neither happened. That's one run, and a Claude Code session has far more tools to be tricked into using, so it says little about that risk.
+
+It also found a rough edge: the model first submitted using the title it had just proposed, was refused, and retried. The work package now says to use the given title.
 
 In the app, with an API key set, a Thought in the Caller line stayed untouched: no usage and the queue unchanged. Its card says "Waiting for a Caller", the Board says how many, and "Organize with API key" is in its menu.
 
