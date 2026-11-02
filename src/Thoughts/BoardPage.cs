@@ -14,6 +14,9 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
     const float RowLabelWidth = 130f;
     const float EmptyRowHeight = 72f; // An empty Project still has room to drop into.
     const string ThoughtDrag = "thought";
+    const float DialogFieldWidth = 272f; // ContentDialog's narrowest width less its padding, and TextBox has no fill mode.
+    const int ReloadDelayMs = 150;
+    const int MaxHealthRows = 20;
     const string Unsorted = "Unsorted";
     static readonly Status[] Columns = [Status.Inbox, Status.Parked, Status.Next, Status.Doing, Status.Done];
     static readonly Status[] AllStatuses = [.. Columns, Status.Dropped];
@@ -32,6 +35,9 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
         var projectField = UseSignal("");
         var renaming = UseSignal<string?>(null);
         var dropOver = UseSignal<string?>(null);
+        var health = UseSignal(LoadHealth(settings.VaultPath));
+        var renameField = UseSignal("");
+        var post = UsePost();
         var captureBox = UseRef(NodeHandle.Null);
         var hooks = UseContext(InputHooks.Current);
         var overlay = UseContext(Overlay.Service);
@@ -44,13 +50,73 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
             if (!first.IsNull) hooks.FocusNode?.Invoke(first, false);
         });
 
+        // Also runs for every change on disk, so it only touches what really changed.
         void Reload()
         {
             var fresh = LoadThoughts(vaultPath.Peek());
-            thoughts.Value = fresh;
-            dropped.Value = DroppedOf(fresh);
-            projects.Value = LoadProjects(vaultPath.Peek());
+            if (!fresh.SequenceEqual(thoughts.Peek()))
+            {
+                thoughts.Value = fresh;
+                dropped.Value = DroppedOf(fresh);
+            }
+            var freshProjects = LoadProjects(vaultPath.Peek());
+            if (!freshProjects.SequenceEqual(projects.Peek())) projects.Value = freshProjects;
+            var freshHealth = LoadHealth(vaultPath.Peek());
+            if (!freshHealth.BrokenLinks.SequenceEqual(health.Peek().BrokenLinks)
+                || !freshHealth.DuplicateNames.SequenceEqual(health.Peek().DuplicateNames))
+                health.Value = freshHealth;
         }
+
+        // Obsidian, a sync tool or the person can change a note at any time, and the vault is the one source of truth.
+        UseEffect(() =>
+        {
+            if (vaultPath.Value is not { } path) return (Action?)null;
+            FileSystemWatcher watcher;
+            try
+            {
+                var vault = new Vault(path);
+                Directory.CreateDirectory(path);
+                vault.EnsureObsidianSettings();
+                watcher = new FileSystemWatcher(path)
+                {
+                    IncludeSubdirectories = true,
+                    NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite,
+                };
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                post(() => message.Value = "Can't watch the vault: " + e.Message);
+                return null;
+            }
+
+            // A burst of events (a rename, a save through a temporary file) becomes one reload.
+            var debounce = new Timer(_ => post(() =>
+            {
+                try
+                {
+                    Reload();
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                {
+                    message.Value = "Couldn't read the vault: " + e.Message;
+                }
+            }), null, Timeout.Infinite, Timeout.Infinite);
+            void Changed(object _, FileSystemEventArgs e)
+            {
+                if (!IsSettingsPath(e.Name)) debounce.Change(ReloadDelayMs, Timeout.Infinite);
+            }
+            watcher.Changed += Changed;
+            watcher.Created += Changed;
+            watcher.Deleted += Changed;
+            watcher.Renamed += (s, e) => Changed(s, e);
+            watcher.Error += (_, _) => debounce.Change(ReloadDelayMs, Timeout.Infinite); // Too many changes at once: reread.
+            watcher.EnableRaisingEvents = true;
+            return () =>
+            {
+                watcher.Dispose();
+                debounce.Dispose();
+            };
+        });
 
         // Every change to the vault goes through here, so a refusal always reaches the person.
         void Change(Action<Vault> change, string? done = null)
@@ -98,7 +164,24 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                 moves.Add(MenuFlyoutItem.RadioItem(project, t.Project == project, () => Change(v => v.SetProject(t.Title, project))));
             moves.Add(MenuFlyoutItem.RadioItem(Unsorted, t.Project is null, () => Change(v => v.SetProject(t.Title, null))));
             items.Add(MenuFlyoutItem.SubMenu("Project", moves));
+            items.Add(new MenuFlyoutItem("Rename", Invoke: () => ConfirmRename(t)));
             return items;
+        }
+
+        void ConfirmRename(Thought t)
+        {
+            renameField.Value = t.Title;
+            ContentDialog.Show(overlay, d =>
+            {
+                d.Title = "Rename Thought";
+                d.Content = TextBox.Create(renameField, null, new TextBox.TextBoxOptions { Width = DialogFieldWidth });
+                d.PrimaryText = "Rename";
+                d.CloseText = "Cancel";
+                d.Closed = result =>
+                {
+                    if (result == ContentDialogResult.Primary) Change(v => v.RenameThought(t.Title, renameField.Peek()));
+                };
+            });
         }
 
         // Dropping sets both, because the Board's two axes are Status and Project.
@@ -251,6 +334,8 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                             }),
                             HStack(Spacing.S, Button.Standard(renaming.Value is { } r ? $"Rename {r}" : "Add Project", SubmitProject)),
                             new TextEl(message.Value ?? "") { Size = 14f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap },
+                            Subtitle("Vault health"),
+                            .. HealthRows(health.Value),
                         ]))),
                 ],
             };
@@ -346,7 +431,12 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
                             MinWidth = 0f,
                             Children = [new TextEl(message.Value ?? "") { Size = 14f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, Shrink = 1f, MinWidth = 0f }],
                         },
-                        Button.Standard("Settings", () =>
+                        Button.Standard(health.Value.Issues switch
+                        {
+                            0 => "Settings",
+                            1 => "Settings: 1 vault problem",
+                            var n => $"Settings: {n} vault problems",
+                        }, () =>
                         {
                             pathField.Value = vaultPath.Peek() ?? AppSettings.SuggestedVaultPath;
                             message.Value = null;
@@ -409,6 +499,24 @@ sealed class BoardPage(AppSettings settings, string settingsFile, bool canSave) 
         return names;
     }
 
+    static List<Element> HealthRows(VaultHealth health)
+    {
+        if (health.Issues == 0) return [Body("Every link leads somewhere, and every name is used once.")];
+        var rows = new List<Element>();
+        foreach (var name in health.DuplicateNames)
+            rows.Add(Body($"Two notes are called {name}, so links to it may reach the wrong one. Rename one in Obsidian."));
+        foreach (var link in health.BrokenLinks.Take(MaxHealthRows))
+            rows.Add(Body($"{link.Note} links to {link.Target}, which doesn't exist."));
+        if (health.BrokenLinks.Count > MaxHealthRows)
+            rows.Add(Caption($"And {health.BrokenLinks.Count - MaxHealthRows} more broken links."));
+        return rows;
+    }
+
+    // The vault's folders plus this app's own files, whose changes never affect what's on the Board.
+    static bool IsSettingsPath(string? relative) =>
+        relative is not null && relative.Split(Path.DirectorySeparatorChar)[0].StartsWith('.');
+
+    static VaultHealth LoadHealth(string? path) => path is null ? new VaultHealth([], []) : new Vault(path).CheckHealth();
     static List<Thought> LoadThoughts(string? path) => path is null ? [] : new Vault(path).ReadThoughts();
     static List<string> LoadProjects(string? path) => path is null ? [] : new Vault(path).ReadProjects();
     static List<Thought> DroppedOf(List<Thought> all) => all.Where(t => t.Status == Status.Dropped).ToList();

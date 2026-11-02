@@ -56,7 +56,7 @@ state: suggested   # or accepted, dismissed
 - `Projects/` and `People/` hold one note each. Only notes in `Thoughts/` count as Thoughts; one with no Status starts in Inbox and gets its missing properties added.
 - `captured` never changes. The body is the person's to edit.
 - A title is suggested once, in the Thought's language, and becomes the file name. Keep-local Thoughts use their first line. Only the person renames.
-- `.thoughts/` (hidden, in the vault) holds cards, pending suggestions and the cost log. Whether Obsidian ignores it is still to be tested.
+- `.thoughts/` (hidden, in the vault) holds cards, pending suggestions and the cost log. Obsidian ignores it: tested on 1.14.4, its files were not in `app.vault.getFiles()`.
 
 The app must:
 - Parse YAML properly, write canonical form and re-read after writing.
@@ -127,7 +127,6 @@ After a few dozen real Thoughts, run a blind manual check using a plain script: 
 ## Open
 
 Left to the builder or to verify:
-- Whether Obsidian ignores `.thoughts/`.
 - Whether Claude Code's lockdown flags work.
 - The Qualcomm licence, before the app is shipped to anyone.
 - The FluentGpu Markdown control's second pass, on engine branch `feat/markdown`, not pushed. The app needs that branch and PR #62 merged, or built against them.
